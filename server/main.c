@@ -74,4 +74,26 @@ int main(int argc, char **argv)
   int server_fd = initSocket(port, BACKLOG);
   printf("Serveur initialisé avec succès sur le port %d. En attente de connexions...\n", port);
   printf("Le descripteur de fichier du serveur est : %d\n", server_fd);
+  
+  struct sockaddr_in client_addr;
+  socklen_t client_len = sizeof(client_addr);
+
+  while (1)
+  {
+      int client_fd = accept(server_fd, (struct sockaddr *)&client_addr, &client_len);
+      if (client_fd == -1)
+      {
+        perror("Erreur accept()");
+        continue;
+      }
+
+      char client_ip[INET_ADDRSTRLEN];
+      inet_ntop(AF_INET, &(client_addr.sin_addr), client_ip, INET_ADDRSTRLEN);
+      printf("Connexion acceptée : %s:%d\n", client_ip, ntohs(client_addr.sin_port));
+
+      close(client_fd);
+  }
+
+  close(server_fd);
+  return 0;
 }
