@@ -9,6 +9,7 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#include "sqlite/sql.h" 
 
 const unsigned int BACKLOG = 7;
 const unsigned int BLOC_ALLOC = 1024;
@@ -78,6 +79,13 @@ int main(int argc, char **argv)
   struct sockaddr_in client_addr;
   socklen_t client_len = sizeof(client_addr);
 
+  // initialisation SQLite
+  sqlite3 *db;
+  if (sqlite3_open("sqlite/quiznet.db", &db) != SQLITE_OK) {
+      fprintf(stderr, "Erreur ouverture base : %s\n", sqlite3_errmsg(db));
+      return 1;
+  }
+
   while (1)
   {
       int client_fd = accept(server_fd, (struct sockaddr *)&client_addr, &client_len);
@@ -89,8 +97,12 @@ int main(int argc, char **argv)
 
       char client_ip[INET_ADDRSTRLEN];
       inet_ntop(AF_INET, &(client_addr.sin_addr), client_ip, INET_ADDRSTRLEN);
-      printf("Connexion acceptée : %s:%d\n", client_ip, ntohs(client_addr.sin_port));
+      int client_port = ntohs(client_addr.sin_port);
 
+      printf("Connexion acceptée : %s:%d\n", client_ip, client_port);
+
+      ClientsInfo client = { client_ip, client_port };
+      isert_data(db, client);
       close(client_fd);
   }
 
