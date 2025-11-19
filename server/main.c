@@ -13,6 +13,7 @@
 #include <unistd.h>
 #include <strings.h>
 #include "sqlite/sql.h" 
+#include "db_utils.h"
 
 const unsigned int BACKLOG = 7;
 const unsigned int BLOC_ALLOC = 1024;
@@ -319,6 +320,9 @@ int main(int argc, char **argv)
       fprintf(stderr, "Impossible d'initialiser la table players\n");
       return 1;
   }
+
+  create_tables(db);
+  populate_db(db);
 
   while (1)
   {
