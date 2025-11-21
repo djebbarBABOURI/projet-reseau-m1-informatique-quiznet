@@ -19,6 +19,30 @@ except ImportError:
     print("="*60)
     import sys
     sys.exit(1)
+except Exception as e:
+    if "macOS" in str(e) or "abort" in str(e).lower():
+        print("="*60)
+        print("❌ Erreur de compatibilité Tkinter avec macOS")
+        print("="*60)
+        print(f"\nErreur: {e}")
+        print("\n🔧 Solutions possibles :")
+        print("\n1. Utiliser la version terminal (recommandé) :")
+        print("   python3 quiznet_client.py")
+        print("\n2. Installer Python via Homebrew avec Tkinter :")
+        print("   brew install python-tk")
+        print("   # Puis utiliser: /opt/homebrew/bin/python3 quiznet_client_gui.py")
+        print("\n3. Utiliser pyenv pour installer une version compatible :")
+        print("   pyenv install 3.11.0")
+        print("   pyenv local 3.11.0")
+        print("\n4. Utiliser Python de la version système :")
+        print("   /usr/bin/python3 quiznet_client_gui.py")
+        print("="*60)
+    else:
+        print(f"❌ Erreur inattendue: {e}")
+        print("\n💡 Essayez la version terminal :")
+        print("   python3 quiznet_client.py")
+    import sys
+    sys.exit(1)
 
 import threading
 import time
@@ -31,9 +55,25 @@ class QuizNetGUI:
     
     def __init__(self, root):
         self.root = root
-        self.root.title("QuizNet - Client Graphique")
-        self.root.geometry("800x600")
+        self.root.title("🎮 QuizNet - Client Graphique")
+        self.root.geometry("900x700")
         self.root.resizable(True, True)
+        
+        # Configuration des couleurs modernes
+        self.colors = {
+            'bg': '#f5f5f5',
+            'fg': '#2c3e50',
+            'primary': '#3498db',
+            'secondary': '#2ecc71',
+            'danger': '#e74c3c',
+            'warning': '#f39c12',
+            'success': '#27ae60',
+            'light': '#ecf0f1',
+            'dark': '#34495e'
+        }
+        
+        # Appliquer le style
+        self.setup_styles()
         
         self.client = QuizNetClient()
         self.current_page = "discovery"
@@ -51,6 +91,21 @@ class QuizNetGUI:
         
         self.setup_ui()
         self.discover_servers()
+    
+    def setup_styles(self):
+        """Configure les styles modernes pour l'interface"""
+        style = ttk.Style()
+        style.theme_use('clam')
+        
+        # Configuration des couleurs de base
+        style.configure('TFrame', background=self.colors['bg'])
+        style.configure('TLabel', background=self.colors['bg'], foreground=self.colors['fg'])
+        style.configure('TButton', padding=10)
+        style.configure('Title.TLabel', font=('Arial', 18, 'bold'), foreground=self.colors['primary'])
+        style.configure('Subtitle.TLabel', font=('Arial', 12), foreground=self.colors['dark'])
+        style.configure('Primary.TButton', background=self.colors['primary'], foreground='white')
+        style.configure('Success.TButton', background=self.colors['success'], foreground='white')
+        style.configure('Danger.TButton', background=self.colors['danger'], foreground='white')
     
     def setup_ui(self):
         """Configure l'interface utilisateur"""
@@ -93,177 +148,258 @@ class QuizNetGUI:
     
     def setup_discovery_page(self):
         """Configure la page de découverte des serveurs"""
-        # Titre
-        title_label = ttk.Label(self.discovery_frame, text="🔍 Recherche de serveurs QuizNet", 
-                               font=("Arial", 16, "bold"))
-        title_label.grid(row=0, column=0, columnspan=2, pady=10)
+        # Titre avec style moderne
+        title_frame = ttk.Frame(self.discovery_frame)
+        title_frame.grid(row=0, column=0, columnspan=3, pady=(0, 20), sticky=(tk.W, tk.E))
         
-        # Liste des serveurs
-        ttk.Label(self.discovery_frame, text="Serveurs disponibles:").grid(row=1, column=0, sticky=tk.W, pady=5)
+        title_label = ttk.Label(title_frame, text="🔍 Recherche de serveurs QuizNet", 
+                               style='Title.TLabel')
+        title_label.pack()
         
-        self.servers_listbox = tk.Listbox(self.discovery_frame, height=10, width=50)
-        self.servers_listbox.grid(row=2, column=0, columnspan=2, pady=5, sticky=(tk.W, tk.E))
+        subtitle_label = ttk.Label(title_frame, text="Sélectionnez un serveur pour commencer", 
+                                   style='Subtitle.TLabel')
+        subtitle_label.pack(pady=(5, 0))
         
-        scrollbar = ttk.Scrollbar(self.discovery_frame, orient=tk.VERTICAL, command=self.servers_listbox.yview)
-        scrollbar.grid(row=2, column=2, sticky=(tk.N, tk.S))
+        # Liste des serveurs avec style amélioré
+        list_frame = ttk.LabelFrame(self.discovery_frame, text="Serveurs disponibles", padding="10")
+        list_frame.grid(row=1, column=0, columnspan=3, pady=10, sticky=(tk.W, tk.E, tk.N, tk.S))
+        
+        self.servers_listbox = tk.Listbox(list_frame, height=12, width=60, 
+                                          font=('Arial', 10),
+                                          selectbackground=self.colors['primary'],
+                                          selectforeground='white')
+        self.servers_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        
+        scrollbar = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=self.servers_listbox.yview)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         self.servers_listbox.config(yscrollcommand=scrollbar.set)
         
-        # Boutons
+        # Boutons avec style moderne
         button_frame = ttk.Frame(self.discovery_frame)
-        button_frame.grid(row=3, column=0, columnspan=2, pady=10)
+        button_frame.grid(row=2, column=0, columnspan=3, pady=20)
         
-        ttk.Button(button_frame, text="🔄 Actualiser", command=self.discover_servers).pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text="➡️ Se connecter", command=self.connect_to_selected_server).pack(side=tk.LEFT, padx=5)
+        refresh_btn = ttk.Button(button_frame, text="🔄 Actualiser", 
+                                command=self.discover_servers, style='Primary.TButton')
+        refresh_btn.pack(side=tk.LEFT, padx=10)
+        
+        connect_btn = ttk.Button(button_frame, text="➡️ Se connecter", 
+                               command=self.connect_to_selected_server, style='Success.TButton')
+        connect_btn.pack(side=tk.LEFT, padx=10)
         
         self.discovery_frame.columnconfigure(0, weight=1)
+        self.discovery_frame.rowconfigure(1, weight=1)
     
     def setup_auth_page(self):
         """Configure la page d'authentification"""
         # Titre
-        title_label = ttk.Label(self.auth_frame, text="🔐 Authentification", 
-                               font=("Arial", 16, "bold"))
-        title_label.grid(row=0, column=0, columnspan=2, pady=10)
+        title_frame = ttk.Frame(self.auth_frame)
+        title_frame.grid(row=0, column=0, columnspan=2, pady=(0, 20), sticky=(tk.W, tk.E))
+        
+        title_label = ttk.Label(title_frame, text="🔐 Authentification", 
+                               style='Title.TLabel')
+        title_label.pack()
+        
+        subtitle_label = ttk.Label(title_frame, text="Créez un compte ou connectez-vous", 
+                                   style='Subtitle.TLabel')
+        subtitle_label.pack(pady=(5, 0))
+        
+        # Container pour les deux formulaires
+        forms_container = ttk.Frame(self.auth_frame)
+        forms_container.grid(row=1, column=0, columnspan=2, pady=10, sticky=(tk.W, tk.E))
         
         # Formulaire d'inscription
-        register_frame = ttk.LabelFrame(self.auth_frame, text="Nouveau compte", padding="10")
-        register_frame.grid(row=1, column=0, columnspan=2, pady=10, sticky=(tk.W, tk.E))
+        register_frame = ttk.LabelFrame(forms_container, text="✨ Nouveau compte", padding="15")
+        register_frame.grid(row=0, column=0, padx=10, pady=10, sticky=(tk.W, tk.E, tk.N))
         
-        ttk.Label(register_frame, text="Pseudo:").grid(row=0, column=0, sticky=tk.W, pady=5)
-        self.register_pseudo = ttk.Entry(register_frame, width=30)
-        self.register_pseudo.grid(row=0, column=1, pady=5, padx=5)
+        ttk.Label(register_frame, text="Pseudo:", font=('Arial', 10, 'bold')).grid(row=0, column=0, sticky=tk.W, pady=8)
+        self.register_pseudo = ttk.Entry(register_frame, width=35, font=('Arial', 10))
+        self.register_pseudo.grid(row=0, column=1, pady=8, padx=10)
         
-        ttk.Label(register_frame, text="Mot de passe:").grid(row=1, column=0, sticky=tk.W, pady=5)
-        self.register_password = ttk.Entry(register_frame, width=30, show="*")
-        self.register_password.grid(row=1, column=1, pady=5, padx=5)
+        ttk.Label(register_frame, text="Mot de passe:", font=('Arial', 10, 'bold')).grid(row=1, column=0, sticky=tk.W, pady=8)
+        self.register_password = ttk.Entry(register_frame, width=35, show="*", font=('Arial', 10))
+        self.register_password.grid(row=1, column=1, pady=8, padx=10)
         
-        ttk.Button(register_frame, text="S'inscrire", command=self.register).grid(row=2, column=0, columnspan=2, pady=10)
+        register_btn = ttk.Button(register_frame, text="📝 S'inscrire", 
+                                 command=self.register, style='Primary.TButton')
+        register_btn.grid(row=2, column=0, columnspan=2, pady=15)
         
         # Formulaire de connexion
-        login_frame = ttk.LabelFrame(self.auth_frame, text="Connexion", padding="10")
-        login_frame.grid(row=2, column=0, columnspan=2, pady=10, sticky=(tk.W, tk.E))
+        login_frame = ttk.LabelFrame(forms_container, text="🔑 Connexion", padding="15")
+        login_frame.grid(row=0, column=1, padx=10, pady=10, sticky=(tk.W, tk.E, tk.N))
         
-        ttk.Label(login_frame, text="Pseudo:").grid(row=0, column=0, sticky=tk.W, pady=5)
-        self.login_pseudo = ttk.Entry(login_frame, width=30)
-        self.login_pseudo.grid(row=0, column=1, pady=5, padx=5)
+        ttk.Label(login_frame, text="Pseudo:", font=('Arial', 10, 'bold')).grid(row=0, column=0, sticky=tk.W, pady=8)
+        self.login_pseudo = ttk.Entry(login_frame, width=35, font=('Arial', 10))
+        self.login_pseudo.grid(row=0, column=1, pady=8, padx=10)
         
-        ttk.Label(login_frame, text="Mot de passe:").grid(row=1, column=0, sticky=tk.W, pady=5)
-        self.login_password = ttk.Entry(login_frame, width=30, show="*")
-        self.login_password.grid(row=1, column=1, pady=5, padx=5)
+        ttk.Label(login_frame, text="Mot de passe:", font=('Arial', 10, 'bold')).grid(row=1, column=0, sticky=tk.W, pady=8)
+        self.login_password = ttk.Entry(login_frame, width=35, show="*", font=('Arial', 10))
+        self.login_password.grid(row=1, column=1, pady=8, padx=10)
         
-        ttk.Button(login_frame, text="Se connecter", command=self.login).grid(row=2, column=0, columnspan=2, pady=10)
+        login_btn = ttk.Button(login_frame, text="🚀 Se connecter", 
+                              command=self.login, style='Success.TButton')
+        login_btn.grid(row=2, column=0, columnspan=2, pady=15)
         
+        forms_container.columnconfigure(0, weight=1)
+        forms_container.columnconfigure(1, weight=1)
         self.auth_frame.columnconfigure(0, weight=1)
     
     def setup_main_page(self):
         """Configure la page principale"""
-        # Titre
-        self.main_title = ttk.Label(self.main_page_frame, text="🎮 QuizNet", 
-                                    font=("Arial", 16, "bold"))
-        self.main_title.grid(row=0, column=0, columnspan=2, pady=10)
+        # Titre avec style moderne
+        title_frame = ttk.Frame(self.main_page_frame)
+        title_frame.grid(row=0, column=0, columnspan=2, pady=(0, 15), sticky=(tk.W, tk.E))
+        
+        self.main_title = ttk.Label(title_frame, text="🎮 QuizNet", 
+                                    style='Title.TLabel')
+        self.main_title.pack()
         
         # Onglets pour thèmes et sessions
         main_notebook = ttk.Notebook(self.main_page_frame)
         main_notebook.grid(row=1, column=0, columnspan=2, pady=10, sticky=(tk.W, tk.E, tk.N, tk.S))
         
         # Page thèmes
-        themes_frame = ttk.Frame(main_notebook, padding="10")
-        main_notebook.add(themes_frame, text="Thèmes")
+        themes_frame = ttk.Frame(main_notebook, padding="15")
+        main_notebook.add(themes_frame, text="📚 Thèmes")
         
-        ttk.Button(themes_frame, text="🔄 Actualiser les thèmes", 
-                  command=self.refresh_themes).pack(pady=5)
+        # Bouton d'actualisation
+        refresh_btn = ttk.Button(themes_frame, text="🔄 Actualiser les thèmes", 
+                                command=self.refresh_themes, style='Primary.TButton')
+        refresh_btn.pack(pady=(0, 10))
+        
+        # Treeview avec style amélioré
+        tree_frame = ttk.LabelFrame(themes_frame, text="Liste des thèmes", padding="10")
+        tree_frame.pack(fill=tk.BOTH, expand=True, pady=5)
         
         columns = ("id", "name")
-        self.themes_tree = ttk.Treeview(themes_frame, columns=columns, show="headings", selectmode="extended", height=10)
+        self.themes_tree = ttk.Treeview(tree_frame, columns=columns, show="headings", 
+                                        selectmode="extended", height=12)
         self.themes_tree.heading("id", text="ID")
         self.themes_tree.heading("name", text="Nom du thème")
-        self.themes_tree.column("id", width=60, anchor=tk.CENTER)
-        self.themes_tree.column("name", anchor=tk.W)
-        self.themes_tree.pack(fill=tk.BOTH, expand=True, pady=5)
+        self.themes_tree.column("id", width=80, anchor=tk.CENTER)
+        self.themes_tree.column("name", anchor=tk.W, width=400)
+        self.themes_tree.pack(fill=tk.BOTH, expand=True)
         self.themes_tree.bind("<<TreeviewSelect>>", self.on_theme_select)
         
-        ttk.Label(themes_frame, textvariable=self.selected_themes_var, anchor="w").pack(fill=tk.X, pady=(0,5))
+        # Label de sélection
+        selection_label = ttk.LabelFrame(themes_frame, text="Sélection", padding="10")
+        selection_label.pack(fill=tk.X, pady=(10, 0))
+        ttk.Label(selection_label, textvariable=self.selected_themes_var, 
+                 anchor="w", font=('Arial', 10)).pack(fill=tk.X)
         
         # Page sessions
-        sessions_frame = ttk.Frame(main_notebook, padding="10")
-        main_notebook.add(sessions_frame, text="Sessions")
+        sessions_frame = ttk.Frame(main_notebook, padding="15")
+        main_notebook.add(sessions_frame, text="🎮 Sessions")
         
+        # Boutons d'action
         button_frame = ttk.Frame(sessions_frame)
-        button_frame.pack(pady=5)
+        button_frame.pack(pady=(0, 10))
         
-        ttk.Button(button_frame, text="🔄 Actualiser", 
-                  command=self.refresh_sessions).pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text="➕ Créer une session", 
-                  command=self.show_create_session_dialog).pack(side=tk.LEFT, padx=5)
+        refresh_btn = ttk.Button(button_frame, text="🔄 Actualiser", 
+                                command=self.refresh_sessions, style='Primary.TButton')
+        refresh_btn.pack(side=tk.LEFT, padx=5)
         
-        self.sessions_listbox = tk.Listbox(sessions_frame, height=10)
-        self.sessions_listbox.pack(fill=tk.BOTH, expand=True, pady=5)
+        create_btn = ttk.Button(button_frame, text="➕ Créer une session", 
+                               command=self.show_create_session_dialog, style='Success.TButton')
+        create_btn.pack(side=tk.LEFT, padx=5)
         
-        ttk.Button(sessions_frame, text="➡️ Rejoindre la session", 
-                  command=self.join_selected_session).pack(pady=5)
+        # Liste des sessions avec style amélioré
+        list_frame = ttk.LabelFrame(sessions_frame, text="Sessions disponibles", padding="10")
+        list_frame.pack(fill=tk.BOTH, expand=True, pady=5)
+        
+        self.sessions_listbox = tk.Listbox(list_frame, height=12, 
+                                          font=('Arial', 10),
+                                          selectbackground=self.colors['primary'],
+                                          selectforeground='white')
+        self.sessions_listbox.pack(fill=tk.BOTH, expand=True)
+        
+        # Bouton de rejoindre
+        join_btn = ttk.Button(sessions_frame, text="➡️ Rejoindre la session", 
+                            command=self.join_selected_session, style='Success.TButton')
+        join_btn.pack(pady=10)
         
         # Page salle d'attente
-        self.waiting_frame = ttk.Frame(main_notebook, padding="10")
-        main_notebook.add(self.waiting_frame, text="Salle d'attente")
+        self.waiting_frame = ttk.Frame(main_notebook, padding="15")
+        main_notebook.add(self.waiting_frame, text="🚪 Salle d'attente")
         
-        self.waiting_text = scrolledtext.ScrolledText(self.waiting_frame, height=15, width=50)
-        self.waiting_text.pack(fill=tk.BOTH, expand=True, pady=5)
+        # Zone de texte avec style
+        text_frame = ttk.LabelFrame(self.waiting_frame, text="Messages", padding="10")
+        text_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
         
+        self.waiting_text = scrolledtext.ScrolledText(text_frame, height=18, width=60,
+                                                      font=('Arial', 10),
+                                                      wrap=tk.WORD)
+        self.waiting_text.pack(fill=tk.BOTH, expand=True)
+        
+        # Bouton de démarrage
         self.start_button = ttk.Button(self.waiting_frame, text="🚀 Démarrer la session", 
-                                       command=self.start_session, state=tk.DISABLED)
-        self.start_button.pack(pady=5)
+                                       command=self.start_session, state=tk.DISABLED,
+                                       style='Success.TButton')
+        self.start_button.pack(pady=10)
         
         self.main_page_frame.columnconfigure(0, weight=1)
         self.main_page_frame.rowconfigure(1, weight=1)
     
     def setup_game_page(self):
         """Configure la page de jeu"""
-        # Informations de la question
-        self.question_frame = ttk.LabelFrame(self.game_frame, text="Question", padding="10")
+        # Informations de la question avec style amélioré
+        self.question_frame = ttk.LabelFrame(self.game_frame, text="📝 Question", padding="15")
         self.question_frame.grid(row=0, column=0, columnspan=2, pady=10, sticky=(tk.W, tk.E))
         
         self.question_label = ttk.Label(self.question_frame, text="En attente d'une question...", 
-                                       font=("Arial", 12), wraplength=600)
-        self.question_label.grid(row=0, column=0, columnspan=2, pady=5)
+                                       font=("Arial", 13, "bold"), wraplength=700,
+                                       foreground=self.colors['dark'])
+        self.question_label.grid(row=0, column=0, columnspan=2, pady=8)
         
-        self.question_info = ttk.Label(self.question_frame, text="", font=("Arial", 10))
+        self.question_info = ttk.Label(self.question_frame, text="", 
+                                      font=("Arial", 11),
+                                      foreground=self.colors['dark'])
         self.question_info.grid(row=1, column=0, columnspan=2, pady=5)
         
-        self.timer_label = ttk.Label(self.question_frame, text="", font=("Arial", 14, "bold"), 
-                                     foreground="red")
-        self.timer_label.grid(row=2, column=0, columnspan=2, pady=5)
+        self.timer_label = ttk.Label(self.question_frame, text="", 
+                                    font=("Arial", 16, "bold"), 
+                                    foreground=self.colors['danger'])
+        self.timer_label.grid(row=2, column=0, columnspan=2, pady=10)
         
-        # Réponses
-        self.answers_frame = ttk.LabelFrame(self.game_frame, text="Réponses", padding="10")
+        # Réponses avec style amélioré
+        self.answers_frame = ttk.LabelFrame(self.game_frame, text="💭 Réponses", padding="15")
         self.answers_frame.grid(row=1, column=0, columnspan=2, pady=10, sticky=(tk.W, tk.E))
         
         self.answer_var = tk.StringVar()
         self.answer_buttons = []
         
         # Zone de réponse texte (créée une seule fois)
-        self.text_answer_entry = ttk.Entry(self.answers_frame, width=40)
+        self.text_answer_entry = ttk.Entry(self.answers_frame, width=50, font=('Arial', 11))
         
-        # Jokers
-        self.jokers_frame = ttk.LabelFrame(self.game_frame, text="Jokers", padding="10")
+        # Jokers avec style amélioré
+        self.jokers_frame = ttk.LabelFrame(self.game_frame, text="🎲 Jokers", padding="15")
         self.jokers_frame.grid(row=2, column=0, columnspan=2, pady=10, sticky=(tk.W, tk.E))
         
-        self.fifty_button = ttk.Button(self.jokers_frame, text="50/50 (1)", 
-                                       command=lambda: self.use_joker("fifty"), state=tk.DISABLED)
-        self.fifty_button.grid(row=0, column=0, padx=5)
+        jokers_inner = ttk.Frame(self.jokers_frame)
+        jokers_inner.pack()
         
-        self.skip_button = ttk.Button(self.jokers_frame, text="Passer (1)", 
-                                      command=lambda: self.use_joker("skip"), state=tk.DISABLED)
-        self.skip_button.grid(row=0, column=1, padx=5)
+        self.fifty_button = ttk.Button(jokers_inner, text="🎯 50/50 (1)", 
+                                       command=lambda: self.use_joker("fifty"), 
+                                       state=tk.DISABLED, style='Warning.TButton')
+        self.fifty_button.pack(side=tk.LEFT, padx=10)
         
-        # Bouton de réponse
+        self.skip_button = ttk.Button(jokers_inner, text="⏭️ Passer (1)", 
+                                      command=lambda: self.use_joker("skip"), 
+                                      state=tk.DISABLED, style='Danger.TButton')
+        self.skip_button.pack(side=tk.LEFT, padx=10)
+        
+        # Bouton de réponse avec style
         self.submit_button = ttk.Button(self.game_frame, text="✅ Envoyer la réponse", 
-                                       command=self.submit_answer, state=tk.DISABLED)
-        self.submit_button.grid(row=3, column=0, columnspan=2, pady=10)
+                                       command=self.submit_answer, state=tk.DISABLED,
+                                       style='Success.TButton')
+        self.submit_button.grid(row=3, column=0, columnspan=2, pady=15)
         
-        # Résultats
-        self.results_frame = ttk.LabelFrame(self.game_frame, text="Résultats", padding="10")
+        # Résultats avec style amélioré
+        self.results_frame = ttk.LabelFrame(self.game_frame, text="📊 Résultats", padding="15")
         self.results_frame.grid(row=4, column=0, columnspan=2, pady=10, sticky=(tk.W, tk.E, tk.N, tk.S))
         
-        self.results_text = scrolledtext.ScrolledText(self.results_frame, height=10, width=50)
+        self.results_text = scrolledtext.ScrolledText(self.results_frame, height=12, width=60,
+                                                      font=('Arial', 10),
+                                                      wrap=tk.WORD)
         self.results_text.pack(fill=tk.BOTH, expand=True)
         
         self.game_frame.columnconfigure(0, weight=1)
@@ -426,17 +562,33 @@ class QuizNetGUI:
     def show_create_session_dialog(self):
         """Affiche la boîte de dialogue de création de session"""
         dialog = tk.Toplevel(self.root)
-        dialog.title("Créer une session")
-        dialog.geometry("400x500")
+        dialog.title("➕ Créer une session")
+        dialog.geometry("500x650")
         dialog.transient(self.root)
         dialog.grab_set()
+        dialog.configure(bg=self.colors['bg'])
+        
+        # Titre
+        title_frame = ttk.Frame(dialog)
+        title_frame.grid(row=0, column=0, columnspan=3, pady=(10, 20), sticky=(tk.W, tk.E))
+        ttk.Label(title_frame, text="➕ Créer une nouvelle session", 
+                 style='Title.TLabel').pack()
+        
+        # Container principal avec padding
+        main_container = ttk.Frame(dialog, padding="15")
+        main_container.grid(row=1, column=0, columnspan=3, sticky=(tk.W, tk.E))
         
         # Thèmes
-        ttk.Label(dialog, text="Thèmes (sélection multiple possible):").grid(row=0, column=0, sticky=tk.W, pady=5, padx=10)
-        themes_listbox = tk.Listbox(dialog, selectmode=tk.MULTIPLE, height=8, exportselection=False)
-        themes_listbox.grid(row=0, column=1, pady=5, padx=10, sticky=(tk.W, tk.E))
-        scrollbar = ttk.Scrollbar(dialog, orient=tk.VERTICAL, command=themes_listbox.yview)
-        scrollbar.grid(row=0, column=2, sticky=(tk.N, tk.S))
+        themes_frame = ttk.LabelFrame(main_container, text="📚 Thèmes (sélection multiple)", padding="10")
+        themes_frame.grid(row=0, column=0, columnspan=2, pady=8, sticky=(tk.W, tk.E))
+        
+        themes_listbox = tk.Listbox(themes_frame, selectmode=tk.MULTIPLE, height=8, 
+                                   exportselection=False, font=('Arial', 10),
+                                   selectbackground=self.colors['primary'],
+                                   selectforeground='white')
+        themes_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar = ttk.Scrollbar(themes_frame, orient=tk.VERTICAL, command=themes_listbox.yview)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         themes_listbox.config(yscrollcommand=scrollbar.set)
         for index, theme in enumerate(self.themes):
             themes_listbox.insert(tk.END, f"[{theme.get('id')}] {theme.get('name')}")
@@ -444,80 +596,233 @@ class QuizNetGUI:
                 themes_listbox.selection_set(index)
         
         # Difficulté
-        ttk.Label(dialog, text="Difficulté:").grid(row=1, column=0, sticky=tk.W, pady=5, padx=10)
+        difficulty_frame = ttk.LabelFrame(main_container, text="⚙️ Paramètres", padding="10")
+        difficulty_frame.grid(row=1, column=0, columnspan=2, pady=8, sticky=(tk.W, tk.E))
+        
+        ttk.Label(difficulty_frame, text="Difficulté:", font=('Arial', 10, 'bold')).grid(row=0, column=0, sticky=tk.W, pady=5, padx=5)
         difficulty_var = tk.StringVar(value="moyen")
-        difficulty_combo = ttk.Combobox(dialog, textvariable=difficulty_var, 
-                                       values=["facile", "moyen", "difficile"], state="readonly")
-        difficulty_combo.grid(row=1, column=1, pady=5, padx=10)
+        difficulty_combo = ttk.Combobox(difficulty_frame, textvariable=difficulty_var, 
+                                       values=["facile", "moyen", "difficile"], 
+                                       state="readonly", width=25, font=('Arial', 10))
+        difficulty_combo.grid(row=0, column=1, pady=5, padx=5, sticky=(tk.W, tk.E))
         
         # Nombre de questions
-        ttk.Label(dialog, text="Nombre de questions (10-50):").grid(row=2, column=0, sticky=tk.W, pady=5, padx=10)
-        nb_questions_entry = ttk.Entry(dialog, width=30)
+        ttk.Label(difficulty_frame, text="Nombre de questions (10-50):", font=('Arial', 10, 'bold')).grid(row=1, column=0, sticky=tk.W, pady=5, padx=5)
+        nb_questions_entry = ttk.Entry(difficulty_frame, width=25, font=('Arial', 10))
         nb_questions_entry.insert(0, "20")
-        nb_questions_entry.grid(row=2, column=1, pady=5, padx=10)
+        nb_questions_entry.grid(row=1, column=1, pady=5, padx=5, sticky=(tk.W, tk.E))
         
         # Temps limite
-        ttk.Label(dialog, text="Temps limite (10-60 sec):").grid(row=3, column=0, sticky=tk.W, pady=5, padx=10)
-        time_limit_entry = ttk.Entry(dialog, width=30)
+        ttk.Label(difficulty_frame, text="Temps limite (10-60 sec):", font=('Arial', 10, 'bold')).grid(row=2, column=0, sticky=tk.W, pady=5, padx=5)
+        time_limit_entry = ttk.Entry(difficulty_frame, width=25, font=('Arial', 10))
         time_limit_entry.insert(0, "30")
-        time_limit_entry.grid(row=3, column=1, pady=5, padx=10)
+        time_limit_entry.grid(row=2, column=1, pady=5, padx=5, sticky=(tk.W, tk.E))
         
         # Mode
-        ttk.Label(dialog, text="Mode:").grid(row=4, column=0, sticky=tk.W, pady=5, padx=10)
+        ttk.Label(difficulty_frame, text="Mode:", font=('Arial', 10, 'bold')).grid(row=3, column=0, sticky=tk.W, pady=5, padx=5)
         mode_var = tk.StringVar(value="solo")
-        mode_combo = ttk.Combobox(dialog, textvariable=mode_var, 
-                                 values=["solo", "battle"], state="readonly")
-        mode_combo.grid(row=4, column=1, pady=5, padx=10)
+        mode_combo = ttk.Combobox(difficulty_frame, textvariable=mode_var, 
+                                 values=["solo", "battle"], state="readonly",
+                                 width=25, font=('Arial', 10))
+        mode_combo.grid(row=3, column=1, pady=5, padx=5, sticky=(tk.W, tk.E))
         
         # Nombre max de joueurs
-        ttk.Label(dialog, text="Nombre max de joueurs:").grid(row=5, column=0, sticky=tk.W, pady=5, padx=10)
-        max_players_entry = ttk.Entry(dialog, width=30)
+        ttk.Label(difficulty_frame, text="Nombre max de joueurs:", font=('Arial', 10, 'bold')).grid(row=4, column=0, sticky=tk.W, pady=5, padx=5)
+        max_players_entry = ttk.Entry(difficulty_frame, width=25, font=('Arial', 10))
         max_players_entry.insert(0, "6")
-        max_players_entry.grid(row=5, column=1, pady=5, padx=10)
+        max_players_entry.grid(row=4, column=1, pady=5, padx=5, sticky=(tk.W, tk.E))
         
         # Nom de la session
-        ttk.Label(dialog, text="Nom de la session:").grid(row=6, column=0, sticky=tk.W, pady=5, padx=10)
-        name_entry = ttk.Entry(dialog, width=30)
-        name_entry.grid(row=6, column=1, pady=5, padx=10)
+        name_frame = ttk.LabelFrame(main_container, text="📝 Informations", padding="10")
+        name_frame.grid(row=2, column=0, columnspan=2, pady=8, sticky=(tk.W, tk.E))
+        
+        ttk.Label(name_frame, text="Nom de la session:", font=('Arial', 10, 'bold')).grid(row=0, column=0, sticky=tk.W, pady=5, padx=5)
+        name_entry = ttk.Entry(name_frame, width=35, font=('Arial', 10))
+        name_entry.grid(row=0, column=1, pady=5, padx=5, sticky=(tk.W, tk.E))
+        
+        difficulty_frame.columnconfigure(1, weight=1)
+        name_frame.columnconfigure(1, weight=1)
+        main_container.columnconfigure(0, weight=1)
+        
+        # Label de statut pour le feedback
+        status_frame = ttk.Frame(dialog)
+        status_frame.grid(row=2, column=0, columnspan=3, pady=10)
+        status_label = ttk.Label(status_frame, text="", foreground=self.colors['primary'], 
+                                 font=('Arial', 9), wraplength=450)
+        status_label.pack()
         
         def create():
+            """Crée une nouvelle session avec validation"""
+            # Réinitialiser le message de statut
+            status_label.config(text="", foreground=self.colors['primary'])
+            
             try:
+                # Validation des thèmes
                 selection = themes_listbox.curselection()
                 if not selection:
+                    status_label.config(text="❌ Veuillez sélectionner au moins un thème", 
+                                      foreground=self.colors['danger'])
                     messagebox.showwarning("Thèmes manquants", "Veuillez sélectionner au moins un thème")
                     return
+                
                 theme_ids = []
                 for idx in selection:
                     try:
                         theme_ids.append(int(self.themes[idx].get("id")))
                     except (ValueError, IndexError, TypeError):
                         continue
-                nb_questions = int(nb_questions_entry.get())
-                time_limit = int(time_limit_entry.get())
-                max_players = int(max_players_entry.get())
-                name = name_entry.get()
                 
+                if not theme_ids:
+                    status_label.config(text="❌ Aucun thème valide sélectionné", 
+                                      foreground=self.colors['danger'])
+                    messagebox.showwarning("Thèmes invalides", "Aucun thème valide sélectionné")
+                    return
+                
+                # Validation du nom
+                name = name_entry.get().strip()
                 if not name:
+                    status_label.config(text="❌ Veuillez entrer un nom de session", 
+                                      foreground=self.colors['danger'])
                     messagebox.showwarning("Erreur", "Veuillez entrer un nom de session")
                     return
                 
-                def do_create():
-                    session_id = self.client.create_session(
-                        name, theme_ids, difficulty_var.get(), nb_questions, 
-                        time_limit, mode_var.get(), max_players
-                    )
-                    if session_id:
-                        self.root.after(0, lambda: dialog.destroy())
-                        self.root.after(0, self.show_waiting_room)
-                    else:
-                        self.root.after(0, lambda: messagebox.showerror("Erreur", "Échec de la création de session"))
+                # Validation des valeurs numériques
+                try:
+                    nb_questions = int(nb_questions_entry.get())
+                    if nb_questions < 10 or nb_questions > 50:
+                        status_label.config(text="❌ Le nombre de questions doit être entre 10 et 50", 
+                                          foreground=self.colors['danger'])
+                        messagebox.showwarning("Valeur invalide", "Le nombre de questions doit être entre 10 et 50")
+                        return
+                except ValueError:
+                    status_label.config(text="❌ Nombre de questions invalide", 
+                                      foreground=self.colors['danger'])
+                    messagebox.showerror("Erreur", "Le nombre de questions doit être un nombre valide")
+                    return
                 
+                try:
+                    time_limit = int(time_limit_entry.get())
+                    if time_limit < 10 or time_limit > 60:
+                        status_label.config(text="❌ Le temps limite doit être entre 10 et 60 secondes", 
+                                          foreground=self.colors['danger'])
+                        messagebox.showwarning("Valeur invalide", "Le temps limite doit être entre 10 et 60 secondes")
+                        return
+                except ValueError:
+                    status_label.config(text="❌ Temps limite invalide", 
+                                      foreground=self.colors['danger'])
+                    messagebox.showerror("Erreur", "Le temps limite doit être un nombre valide")
+                    return
+                
+                try:
+                    max_players = int(max_players_entry.get())
+                    if max_players < 2:
+                        status_label.config(text="❌ Le nombre maximum de joueurs doit être au moins 2", 
+                                          foreground=self.colors['danger'])
+                        messagebox.showwarning("Valeur invalide", "Le nombre maximum de joueurs doit être au moins 2")
+                        return
+                except ValueError:
+                    status_label.config(text="❌ Nombre de joueurs invalide", 
+                                      foreground=self.colors['danger'])
+                    messagebox.showerror("Erreur", "Le nombre maximum de joueurs doit être un nombre valide")
+                    return
+                
+                # Désactiver le bouton pendant la création
+                create_btn.config(state=tk.DISABLED)
+                status_label.config(text="⏳ Création de la session en cours...", 
+                                  foreground=self.colors['primary'])
+                
+                def do_create():
+                    """Fonction exécutée dans un thread séparé pour créer la session"""
+                    try:
+                        session_id = self.client.create_session(
+                            name, theme_ids, difficulty_var.get(), nb_questions, 
+                            time_limit, mode_var.get(), max_players
+                        )
+                        
+                        if session_id:
+                            # Succès - fermer la dialog et afficher la salle d'attente
+                            self.root.after(0, lambda: dialog.destroy())
+                            self.root.after(0, lambda: status_label.config(text="✅ Session créée avec succès !", 
+                                                                          foreground=self.colors['success']))
+                            self.root.after(0, self.show_waiting_room)
+                            # Rafraîchir la liste des sessions
+                            self.root.after(0, self.refresh_sessions)
+                        else:
+                            # Échec - réactiver le bouton et afficher l'erreur détaillée
+                            # Récupérer le message d'erreur du serveur
+                            error_info = self.client.last_error
+                            if error_info:
+                                error_statut = error_info.get("statut", "inconnu")
+                                error_message = error_info.get("message", "Erreur inconnue")
+                                error_action = error_info.get("action", "session/create")
+                                
+                                error_msg = f"Erreur {error_statut}: {error_message}"
+                                
+                                # Message détaillé pour la boîte de dialogue
+                                if error_statut == "404":
+                                    detailed_msg = (
+                                        f"❌ Route non implémentée sur le serveur\n\n"
+                                        f"Le serveur a retourné : {error_statut} - {error_message}\n\n"
+                                        f"La route '{error_action}' n'est pas encore implémentée sur le serveur.\n"
+                                        f"Il faut ajouter le traitement de cette route dans le code serveur (main.c)."
+                                    )
+                                else:
+                                    detailed_msg = (
+                                        f"❌ Erreur lors de la création de session\n\n"
+                                        f"Statut: {error_statut}\n"
+                                        f"Message: {error_message}\n\n"
+                                        f"Vérifiez que :\n"
+                                        f"- Le serveur est bien lancé\n"
+                                        f"- Vous êtes connecté et authentifié\n"
+                                        f"- Les paramètres sont corrects"
+                                    )
+                            else:
+                                error_msg = "Échec de la création de session"
+                                detailed_msg = (
+                                    "Échec de la création de session.\n\n"
+                                    "Vérifiez que :\n"
+                                    "- Le serveur est bien lancé\n"
+                                    "- Vous êtes connecté et authentifié\n"
+                                    "- La route 'session/create' est implémentée sur le serveur"
+                                )
+                            
+                            self.root.after(0, lambda: create_btn.config(state=tk.NORMAL))
+                            self.root.after(0, lambda: status_label.config(
+                                text=f"❌ {error_msg}", 
+                                foreground=self.colors['danger']))
+                            self.root.after(0, lambda msg=detailed_msg: messagebox.showerror("Erreur de création", msg))
+                    except Exception as e:
+                        # Erreur inattendue
+                        error_msg = f"Erreur lors de la création: {str(e)}"
+                        self.root.after(0, lambda: create_btn.config(state=tk.NORMAL))
+                        self.root.after(0, lambda: status_label.config(
+                            text=f"❌ {error_msg}", 
+                            foreground=self.colors['danger']))
+                        self.root.after(0, lambda: messagebox.showerror("Erreur", error_msg))
+                
+                # Lancer la création dans un thread séparé
                 threading.Thread(target=do_create, daemon=True).start()
-            except ValueError:
-                messagebox.showerror("Erreur", "Valeurs invalides")
+                
+            except Exception as e:
+                # Erreur générale
+                create_btn.config(state=tk.NORMAL)
+                status_label.config(text=f"❌ Erreur: {str(e)}", 
+                                  foreground=self.colors['danger'])
+                messagebox.showerror("Erreur", f"Une erreur est survenue: {str(e)}")
         
-        ttk.Button(dialog, text="Créer", command=create).grid(row=7, column=0, columnspan=2, pady=20)
-        ttk.Button(dialog, text="Annuler", command=dialog.destroy).grid(row=8, column=0, columnspan=2)
+        # Boutons avec style
+        button_frame = ttk.Frame(dialog)
+        button_frame.grid(row=4, column=0, columnspan=3, pady=(10, 20))
+        
+        create_btn = ttk.Button(button_frame, text="✅ Créer la session", command=create, 
+                               style='Success.TButton')
+        create_btn.pack(side=tk.LEFT, padx=10)
+        
+        cancel_btn = ttk.Button(button_frame, text="❌ Annuler", command=dialog.destroy,
+                               style='Danger.TButton')
+        cancel_btn.pack(side=tk.LEFT, padx=10)
+        
+        dialog.columnconfigure(0, weight=1)
     
     def join_selected_session(self):
         """Rejoint la session sélectionnée"""
@@ -699,11 +1004,25 @@ class QuizNetGUI:
     def update_timer(self):
         """Met à jour le timer"""
         if self.timer_running and self.time_remaining > 0 and not self.answered:
-            self.timer_label.config(text=f"⏱️ Temps restant: {self.time_remaining}s")
+            # Changer la couleur selon le temps restant
+            if self.time_remaining <= 5:
+                color = self.colors['danger']
+            elif self.time_remaining <= 10:
+                color = self.colors['warning']
+            else:
+                color = self.colors['primary']
+            
+            self.timer_label.config(
+                text=f"⏱️ Temps restant: {self.time_remaining}s",
+                foreground=color
+            )
             self.time_remaining -= 1
             self.root.after(1000, self.update_timer)
         elif self.time_remaining <= 0:
-            self.timer_label.config(text="⏱️ Temps écoulé")
+            self.timer_label.config(
+                text="⏱️ Temps écoulé",
+                foreground=self.colors['danger']
+            )
             self.timer_running = False
     
     def use_joker(self, joker_type: str):

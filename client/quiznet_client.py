@@ -48,6 +48,7 @@ class QuizNetClient:
         self.in_game = False
         self.time_limit = 30
         self.push_callback = None  # Callback pour les messages push (utilisé par GUI)
+        self.last_error: Optional[Dict] = None  # Dernière erreur rencontrée
         
     def discover_servers(self) -> List[Dict[str, Any]]:
         """Découvre les serveurs QuizNet disponibles via UDP broadcast"""
@@ -420,6 +421,10 @@ class QuizNetClient:
     def create_session(self, name: str, theme_ids: List[int], difficulty: str, 
                       nb_questions: int, time_limit: int, mode: str, max_players: int) -> Optional[int]:
         """Crée une nouvelle session"""
+        if not self.pseudo:
+            print("❌ Erreur: Vous devez être connecté pour créer une session")
+            return None
+        
         response = self._send_request("POST", "session/create", {
             "name": name,
             "themeIds": theme_ids,
@@ -427,7 +432,8 @@ class QuizNetClient:
             "nbQuestions": nb_questions,
             "timeLimit": time_limit,
             "mode": mode,
-            "maxPlayers": max_players
+            "maxPlayers": max_players,
+            "pseudo": self.pseudo  # Ajouter le pseudo pour identifier le créateur
         })
         
         if response and response.get("statut") == "201":
@@ -441,8 +447,29 @@ class QuizNetClient:
             print(f"✓ Session créée (ID: {self.current_session_id})")
             return self.current_session_id
         else:
-            message = response.get("message", "Erreur inconnue") if response else "Pas de réponse"
-            print(f"❌ Erreur de création: {message}")
+            # Afficher plus de détails sur l'erreur
+            if response:
+                statut = response.get("statut", "inconnu")
+                message = response.get("message", "Erreur inconnue")
+                action = response.get("action", "session/create")
+                print(f"❌ Erreur de création de session:")
+                print(f"   Statut: {statut}")
+                print(f"   Action: {action}")
+                print(f"   Message: {message}")
+                # Stocker le message d'erreur pour l'interface graphique
+                self.last_error = {
+                    "statut": statut,
+                    "message": message,
+                    "action": action
+                }
+            else:
+                print(f"❌ Erreur de création: Pas de réponse du serveur")
+                print(f"   Vérifiez que le serveur est bien lancé et accessible")
+                self.last_error = {
+                    "statut": "timeout",
+                    "message": "Pas de réponse du serveur",
+                    "action": "session/create"
+                }
             return None
     
     def join_session(self, session_id: int) -> bool:

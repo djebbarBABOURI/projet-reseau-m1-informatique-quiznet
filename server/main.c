@@ -155,6 +155,18 @@ static void send_register_success(int fd);
 static void send_login_success(int fd);
 static void send_error_response(int fd, const char *action, const char *status, const char *message);
 static void handle_themes_list(int fd, sqlite3 *db);
+static void handle_session_create(const char *json, int fd, sqlite3 *db);
+static bool extract_json_string(const char *json, const char *key, char *out, size_t outSize);
+static bool extract_json_int(const char *json, const char *key, int *out);
+static bool extract_json_int_array(const char *json, const char *key, int **out, size_t *count);
+static int get_player_id_by_pseudo(sqlite3 *db, const char *pseudo);
+static int create_session_in_db(sqlite3 *db, const char *name, const char *difficulty, 
+                                 int nb_questions, int time_limit, const char *mode, 
+                                 int max_players, int player_id, int *session_id);
+static int link_themes_to_session(sqlite3 *db, int session_id, int *theme_ids, size_t theme_count);
+static int add_player_to_session(sqlite3 *db, int session_id, int player_id, int is_creator, 
+                                 int lives, int *players_session_id);
+static int create_jokers_for_player(sqlite3 *db, int players_session_id);
 static bool append_str(char **buffer, size_t *length, size_t *capacity, const char *text);
 static bool append_char(char **buffer, size_t *length, size_t *capacity, char c);
 static bool append_json_string(char **buffer, size_t *length, size_t *capacity, const unsigned char *text);
@@ -486,6 +498,15 @@ static void handle_client_request(const char *request, int client_fd, sqlite3 *d
         return;
     }
 
+    if (strcasecmp(method, "POST") == 0 && strcmp(path, "session/create") == 0) {
+        if (!json) {
+            send_error_response(client_fd, "session/create", "400", "Missing JSON body");
+            return;
+        }
+        handle_session_create(json, client_fd, db);
+        return;
+    }
+
     send_error_response(client_fd, "unknown", "404", "endpoint not implemented");
 }
 
@@ -749,4 +770,320 @@ static void handle_themes_list(int fd, sqlite3 *db)
 
     send(fd, json, length, 0);
     free(json);
+}
+
+// Fonction pour extraire un entier JSON
+static bool extract_json_int(const char *json, const char *key, int *out)
+{
+    if (!json || !key || !out) return false;
+    char pattern[128];
+    snprintf(pattern, sizeof(pattern), "\"%s\"", key);
+    const char *key_pos = strstr(json, pattern);
+    if (!key_pos) return false;
+    const char *colon = strchr(key_pos + strlen(pattern), ':');
+    if (!colon) return false;
+    colon++;
+    while (*colon && isspace((unsigned char)*colon)) colon++;
+    char *endptr;
+    long val = strtol(colon, &endptr, 10);
+    if (endptr == colon) return false;
+    *out = (int)val;
+    return true;
+}
+
+// Fonction pour extraire un tableau d'entiers JSON (ex: [1,2,3])
+static bool extract_json_int_array(const char *json, const char *key, int **out, size_t *count)
+{
+    if (!json || !key || !out || !count) return false;
+    char pattern[128];
+    snprintf(pattern, sizeof(pattern), "\"%s\"", key);
+    const char *key_pos = strstr(json, pattern);
+    if (!key_pos) return false;
+    const char *colon = strchr(key_pos + strlen(pattern), ':');
+    if (!colon) return false;
+    colon++;
+    while (*colon && isspace((unsigned char)*colon)) colon++;
+    if (*colon != '[') return false;
+    colon++;
+    
+    // Compter les éléments
+    *count = 0;
+    const char *p = colon;
+    while (*p && *p != ']') {
+        if (isdigit((unsigned char)*p)) {
+            (*count)++;
+            while (*p && (isdigit((unsigned char)*p) || *p == ',' || isspace((unsigned char)*p))) {
+                if (*p == ',') break;
+                p++;
+            }
+        }
+        if (*p == ',') p++;
+        while (*p && isspace((unsigned char)*p)) p++;
+    }
+    
+    if (*count == 0) return false;
+    
+    // Allouer et remplir le tableau
+    *out = malloc(*count * sizeof(int));
+    if (!*out) return false;
+    
+    p = colon;
+    size_t idx = 0;
+    while (*p && *p != ']' && idx < *count) {
+        while (*p && (isspace((unsigned char)*p) || *p == ',')) p++;
+        if (!isdigit((unsigned char)*p)) break;
+        char *endptr;
+        long val = strtol(p, &endptr, 10);
+        (*out)[idx++] = (int)val;
+        p = endptr;
+        while (*p && (isspace((unsigned char)*p) || *p == ',')) p++;
+    }
+    
+    return true;
+}
+
+// Obtenir l'ID d'un joueur par son pseudo
+static int get_player_id_by_pseudo(sqlite3 *db, const char *pseudo)
+{
+    const char *sql = "SELECT id FROM players WHERE pseudo = ?;";
+    sqlite3_stmt *stmt;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+        return -1;
+    }
+    sqlite3_bind_text(stmt, 1, pseudo, -1, SQLITE_TRANSIENT);
+    int rc = sqlite3_step(stmt);
+    int player_id = -1;
+    if (rc == SQLITE_ROW) {
+        player_id = sqlite3_column_int(stmt, 0);
+    }
+    sqlite3_finalize(stmt);
+    return player_id;
+}
+
+// Créer une session dans la base de données
+static int create_session_in_db(sqlite3 *db, const char *name, const char *difficulty, 
+                                 int nb_questions, int time_limit, const char *mode, 
+                                 int max_players, int player_id, int *session_id)
+{
+    const char *sql = "INSERT INTO sessions (name, difficulty, nb_questions, time_limit, mode, max_players, status, created_by) VALUES (?, ?, ?, ?, ?, ?, 'waiting', ?);";
+    sqlite3_stmt *stmt;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+        fprintf(stderr, "Erreur prepare create_session: %s\n", sqlite3_errmsg(db));
+        return -1;
+    }
+    sqlite3_bind_text(stmt, 1, name, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, difficulty, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int(stmt, 3, nb_questions);
+    sqlite3_bind_int(stmt, 4, time_limit);
+    sqlite3_bind_text(stmt, 5, mode, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int(stmt, 6, max_players);
+    sqlite3_bind_int(stmt, 7, player_id);
+    
+    int rc = sqlite3_step(stmt);
+    if (rc != SQLITE_DONE) {
+        fprintf(stderr, "Erreur create_session: %s\n", sqlite3_errmsg(db));
+        sqlite3_finalize(stmt);
+        return -1;
+    }
+    
+    *session_id = (int)sqlite3_last_insert_rowid(db);
+    sqlite3_finalize(stmt);
+    return 0;
+}
+
+// Lier les thèmes à une session
+static int link_themes_to_session(sqlite3 *db, int session_id, int *theme_ids, size_t theme_count)
+{
+    const char *sql = "INSERT INTO themes_session (session_id, theme_id) VALUES (?, ?);";
+    sqlite3_stmt *stmt;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+        fprintf(stderr, "Erreur prepare link_themes: %s\n", sqlite3_errmsg(db));
+        return -1;
+    }
+    
+    for (size_t i = 0; i < theme_count; i++) {
+        sqlite3_reset(stmt);
+        sqlite3_bind_int(stmt, 1, session_id);
+        sqlite3_bind_int(stmt, 2, theme_ids[i]);
+        int rc = sqlite3_step(stmt);
+        if (rc != SQLITE_DONE) {
+            fprintf(stderr, "Erreur link_themes: %s\n", sqlite3_errmsg(db));
+            sqlite3_finalize(stmt);
+            return -1;
+        }
+    }
+    
+    sqlite3_finalize(stmt);
+    return 0;
+}
+
+// Ajouter un joueur à une session
+static int add_player_to_session(sqlite3 *db, int session_id, int player_id, int is_creator, 
+                                 int lives, int *players_session_id)
+{
+    const char *sql = "INSERT INTO players_session (player_id, session_id, lives, current_score, is_creator, eliminated_at) VALUES (?, ?, ?, 0, ?, NULL);";
+    sqlite3_stmt *stmt;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+        fprintf(stderr, "Erreur prepare add_player_to_session: %s\n", sqlite3_errmsg(db));
+        return -1;
+    }
+    sqlite3_bind_int(stmt, 1, player_id);
+    sqlite3_bind_int(stmt, 2, session_id);
+    sqlite3_bind_int(stmt, 3, lives);
+    sqlite3_bind_int(stmt, 4, is_creator);
+    
+    int rc = sqlite3_step(stmt);
+    if (rc != SQLITE_DONE) {
+        fprintf(stderr, "Erreur add_player_to_session: %s\n", sqlite3_errmsg(db));
+        sqlite3_finalize(stmt);
+        return -1;
+    }
+    
+    *players_session_id = (int)sqlite3_last_insert_rowid(db);
+    sqlite3_finalize(stmt);
+    return 0;
+}
+
+// Créer les jokers pour un joueur dans une session
+static int create_jokers_for_player(sqlite3 *db, int players_session_id)
+{
+    const char *sql = "INSERT INTO jokers (players_session_id, fifty, skip) VALUES (?, 1, 1);";
+    sqlite3_stmt *stmt;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+        fprintf(stderr, "Erreur prepare create_jokers: %s\n", sqlite3_errmsg(db));
+        return -1;
+    }
+    sqlite3_bind_int(stmt, 1, players_session_id);
+    int rc = sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+    return (rc == SQLITE_DONE) ? 0 : -1;
+}
+
+// Gérer la création de session
+static void handle_session_create(const char *json, int fd, sqlite3 *db)
+{
+    char name[256] = {0};
+    char difficulty[32] = {0};
+    char mode[32] = {0};
+    char pseudo[128] = {0};
+    int nb_questions = 0;
+    int time_limit = 0;
+    int max_players = 0;
+    int *theme_ids = NULL;
+    size_t theme_count = 0;
+    
+    // Extraire les données JSON
+    if (!extract_json_string(json, "name", name, sizeof(name)) ||
+        !extract_json_string(json, "difficulty", difficulty, sizeof(difficulty)) ||
+        !extract_json_string(json, "mode", mode, sizeof(mode)) ||
+        !extract_json_int(json, "nbQuestions", &nb_questions) ||
+        !extract_json_int(json, "timeLimit", &time_limit) ||
+        !extract_json_int(json, "maxPlayers", &max_players) ||
+        !extract_json_int_array(json, "themeIds", &theme_ids, &theme_count)) {
+        if (theme_ids) free(theme_ids);
+        send_error_response(fd, "session/create", "400", "Missing or invalid required fields");
+        return;
+    }
+    
+    // Pour l'instant, on utilise le pseudo du dernier login
+    // TODO: Implémenter un système de session/token pour identifier le joueur
+    // Pour l'instant, on va demander le pseudo dans la requête ou utiliser une valeur par défaut
+    // Pour simplifier, on va chercher le pseudo dans la requête, sinon on utilise "anonymous"
+    if (!extract_json_string(json, "pseudo", pseudo, sizeof(pseudo))) {
+        // Si pas de pseudo, on ne peut pas créer la session
+        if (theme_ids) free(theme_ids);
+        send_error_response(fd, "session/create", "400", "Missing pseudo - user must be authenticated");
+        return;
+    }
+    
+    // Validation des valeurs
+    if (nb_questions < 10 || nb_questions > 50) {
+        if (theme_ids) free(theme_ids);
+        send_error_response(fd, "session/create", "400", "nbQuestions must be between 10 and 50");
+        return;
+    }
+    if (time_limit < 10 || time_limit > 60) {
+        if (theme_ids) free(theme_ids);
+        send_error_response(fd, "session/create", "400", "timeLimit must be between 10 and 60");
+        return;
+    }
+    if (max_players < 2) {
+        if (theme_ids) free(theme_ids);
+        send_error_response(fd, "session/create", "400", "maxPlayers must be at least 2");
+        return;
+    }
+    if (theme_count == 0) {
+        if (theme_ids) free(theme_ids);
+        send_error_response(fd, "session/create", "400", "At least one theme must be selected");
+        return;
+    }
+    
+    // Obtenir l'ID du joueur
+    int player_id = get_player_id_by_pseudo(db, pseudo);
+    if (player_id < 0) {
+        if (theme_ids) free(theme_ids);
+        send_error_response(fd, "session/create", "404", "Player not found");
+        return;
+    }
+    
+    // Créer la session
+    int session_id = 0;
+    if (create_session_in_db(db, name, difficulty, nb_questions, time_limit, mode, max_players, player_id, &session_id) != 0) {
+        if (theme_ids) free(theme_ids);
+        send_error_response(fd, "session/create", "500", "Failed to create session");
+        return;
+    }
+    
+    // Lier les thèmes
+    if (link_themes_to_session(db, session_id, theme_ids, theme_count) != 0) {
+        if (theme_ids) free(theme_ids);
+        send_error_response(fd, "session/create", "500", "Failed to link themes");
+        return;
+    }
+    
+    // Ajouter le joueur à la session
+    int players_session_id = 0;
+    int lives = (strcmp(mode, "battle") == 0) ? 4 : 0; // 4 vies en mode battle, 0 en solo
+    if (add_player_to_session(db, session_id, player_id, 1, lives, &players_session_id) != 0) {
+        if (theme_ids) free(theme_ids);
+        send_error_response(fd, "session/create", "500", "Failed to add player to session");
+        return;
+    }
+    
+    // Créer les jokers pour le joueur
+    if (create_jokers_for_player(db, players_session_id) != 0) {
+        // Non critique, on continue
+    }
+    
+    // Envoyer la réponse de succès
+    size_t capacity = 512;
+    size_t length = 0;
+    char *response = malloc(capacity);
+    if (!response) {
+        if (theme_ids) free(theme_ids);
+        send_error_response(fd, "session/create", "500", "Memory error");
+        return;
+    }
+    response[0] = '\0';
+    
+    char session_id_str[32];
+    snprintf(session_id_str, sizeof(session_id_str), "%d", session_id);
+    
+    append_str(&response, &length, &capacity, "{\"action\":\"session/create\",\"statut\":\"201\",\"sessionId\":");
+    append_str(&response, &length, &capacity, session_id_str);
+    append_str(&response, &length, &capacity, ",\"isCreator\":true");
+    
+    // Ajouter les jokers
+    append_str(&response, &length, &capacity, ",\"jokers\":{\"fifty\":1,\"skip\":1}");
+    
+    // Ajouter les vies si mode battle
+    if (strcmp(mode, "battle") == 0) {
+        append_str(&response, &length, &capacity, ",\"lives\":4");
+    }
+    
+    append_str(&response, &length, &capacity, "}\n");
+    
+    send(fd, response, length, 0);
+    free(response);
+    if (theme_ids) free(theme_ids);
 }
