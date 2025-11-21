@@ -154,6 +154,10 @@ static void send_json_response(int fd, const char *action, const char *status, c
 static void send_register_success(int fd);
 static void send_login_success(int fd);
 static void send_error_response(int fd, const char *action, const char *status, const char *message);
+static void handle_themes_list(int fd, sqlite3 *db);
+static bool append_str(char **buffer, size_t *length, size_t *capacity, const char *text);
+static bool append_char(char **buffer, size_t *length, size_t *capacity, char c);
+static bool append_json_string(char **buffer, size_t *length, size_t *capacity, const unsigned char *text);
 
 // ==== Implémentation SHA-256 (public domain) ====
 typedef struct {
@@ -477,6 +481,11 @@ static void handle_client_request(const char *request, int client_fd, sqlite3 *d
         return;
     }
 
+    if (strcasecmp(method, "GET") == 0 && strcmp(path, "themes/list") == 0) {
+        handle_themes_list(client_fd, db);
+        return;
+    }
+
     send_error_response(client_fd, "unknown", "404", "endpoint not implemented");
 }
 
@@ -584,4 +593,160 @@ static void send_login_success(int fd)
 static void send_error_response(int fd, const char *action, const char *status, const char *message)
 {
     send_json_response(fd, action, status, message);
+}
+
+static bool ensure_capacity(char **buffer, size_t *capacity, size_t required)
+{
+    if (*capacity >= required) {
+        return true;
+    }
+    size_t new_capacity = *capacity;
+    while (new_capacity < required) {
+        new_capacity *= 2;
+    }
+    char *tmp = realloc(*buffer, new_capacity);
+    if (!tmp) {
+        return false;
+    }
+    *buffer = tmp;
+    *capacity = new_capacity;
+    return true;
+}
+
+static bool append_char(char **buffer, size_t *length, size_t *capacity, char c)
+{
+    if (!ensure_capacity(buffer, capacity, *length + 2)) {
+        return false;
+    }
+    (*buffer)[(*length)++] = c;
+    (*buffer)[*length] = '\0';
+    return true;
+}
+
+static bool append_str(char **buffer, size_t *length, size_t *capacity, const char *text)
+{
+    size_t to_add = strlen(text);
+    if (!ensure_capacity(buffer, capacity, *length + to_add + 1)) {
+        return false;
+    }
+    memcpy(*buffer + *length, text, to_add);
+    *length += to_add;
+    (*buffer)[*length] = '\0';
+    return true;
+}
+
+static bool append_json_string(char **buffer, size_t *length, size_t *capacity, const unsigned char *text)
+{
+    if (!text) {
+        return true;
+    }
+    const unsigned char *p = text;
+    while (*p) {
+        unsigned char c = *p++;
+        switch (c) {
+            case '\"':
+            case '\\':
+                if (!append_char(buffer, length, capacity, '\\') ||
+                    !append_char(buffer, length, capacity, (char)c)) {
+                    return false;
+                }
+                break;
+            case '\b':
+                if (!append_str(buffer, length, capacity, "\\b")) return false;
+                break;
+            case '\f':
+                if (!append_str(buffer, length, capacity, "\\f")) return false;
+                break;
+            case '\n':
+                if (!append_str(buffer, length, capacity, "\\n")) return false;
+                break;
+            case '\r':
+                if (!append_str(buffer, length, capacity, "\\r")) return false;
+                break;
+            case '\t':
+                if (!append_str(buffer, length, capacity, "\\t")) return false;
+                break;
+            default:
+                if (c < 0x20) {
+                    char esc[7];
+                    snprintf(esc, sizeof(esc), "\\u%04x", c);
+                    if (!append_str(buffer, length, capacity, esc)) return false;
+                } else {
+                    if (!append_char(buffer, length, capacity, (char)c)) return false;
+                }
+                break;
+        }
+    }
+    return true;
+}
+
+static void handle_themes_list(int fd, sqlite3 *db)
+{
+    const char *sql = "SELECT id, name FROM themes ORDER BY id;";
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+        send_error_response(fd, "themes/list", "500", "database error");
+        return;
+    }
+
+    size_t capacity = 2048;
+    size_t length = 0;
+    char *json = malloc(capacity);
+    if (!json) {
+        sqlite3_finalize(stmt);
+        send_error_response(fd, "themes/list", "500", "memory error");
+        return;
+    }
+    json[0] = '\0';
+
+    bool ok = append_str(&json, &length, &capacity, "{\"action\":\"themes/list\",\"statut\":\"200\",\"themes\":[");
+    bool first = true;
+
+    while (ok) {
+        int rc = sqlite3_step(stmt);
+        if (rc == SQLITE_ROW) {
+            if (!first) {
+                ok = append_char(&json, &length, &capacity, ',');
+                if (!ok) break;
+            }
+            first = false;
+            int id = sqlite3_column_int(stmt, 0);
+            const unsigned char *name = sqlite3_column_text(stmt, 1);
+
+            char id_buf[32];
+            snprintf(id_buf, sizeof(id_buf), "%d", id);
+
+            ok = append_str(&json, &length, &capacity, "{\"id\":");
+            if (!ok) break;
+            ok = append_str(&json, &length, &capacity, id_buf);
+            if (!ok) break;
+            ok = append_str(&json, &length, &capacity, ",\"name\":\"");
+            if (!ok) break;
+            ok = append_json_string(&json, &length, &capacity, name ? name : (const unsigned char *)"");
+            if (!ok) break;
+            ok = append_str(&json, &length, &capacity, "\"}");
+        } else if (rc == SQLITE_DONE) {
+            break;
+        } else {
+            ok = false;
+            break;
+        }
+    }
+
+    sqlite3_finalize(stmt);
+
+    if (!ok) {
+        free(json);
+        send_error_response(fd, "themes/list", "500", "internal error");
+        return;
+    }
+
+    if (!append_str(&json, &length, &capacity, "]}\n")) {
+        free(json);
+        send_error_response(fd, "themes/list", "500", "internal error");
+        return;
+    }
+
+    send(fd, json, length, 0);
+    free(json);
 }

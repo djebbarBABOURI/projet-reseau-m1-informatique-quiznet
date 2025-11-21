@@ -1,7 +1,7 @@
 #ifndef DB_UTILS_H
 #define DB_UTILS_H
 
-#include <sqlite3.h>
+#include "sqlite/sqlite3.h"
 
 typedef struct {
     const char* question;

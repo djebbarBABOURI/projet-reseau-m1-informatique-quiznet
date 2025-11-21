@@ -3,7 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
-#include <sqlite3.h>
+#include "sqlite/sqlite3.h"
 
 void create_tables(sqlite3 *db) {
     const char *sql_statements[] = {
@@ -92,7 +92,8 @@ void create_tables(sqlite3 *db) {
         ");"
     };
 
-    for (int i = 0; i < sizeof(sql_statements)/sizeof(sql_statements[0]); i++) {
+    size_t count = sizeof(sql_statements) / sizeof(sql_statements[0]);
+    for (size_t i = 0; i < count; i++) {
         char *errmsg = 0;
         if (sqlite3_exec(db, sql_statements[i], 0, 0, &errmsg) != SQLITE_OK) {
             fprintf(stderr, "SQL error: %s\n", errmsg);

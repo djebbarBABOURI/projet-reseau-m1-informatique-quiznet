@@ -39,6 +39,8 @@ class QuizNetGUI:
         self.current_page = "discovery"
         self.selected_server = None
         self.themes = []
+        self.selected_theme_ids: List[int] = []
+        self.selected_themes_var = tk.StringVar(value="Aucun thème sélectionné")
         self.sessions = []
         
         # Variables pour le jeu
@@ -170,8 +172,16 @@ class QuizNetGUI:
         ttk.Button(themes_frame, text="🔄 Actualiser les thèmes", 
                   command=self.refresh_themes).pack(pady=5)
         
-        self.themes_text = scrolledtext.ScrolledText(themes_frame, height=10, width=50)
-        self.themes_text.pack(fill=tk.BOTH, expand=True, pady=5)
+        columns = ("id", "name")
+        self.themes_tree = ttk.Treeview(themes_frame, columns=columns, show="headings", selectmode="extended", height=10)
+        self.themes_tree.heading("id", text="ID")
+        self.themes_tree.heading("name", text="Nom du thème")
+        self.themes_tree.column("id", width=60, anchor=tk.CENTER)
+        self.themes_tree.column("name", anchor=tk.W)
+        self.themes_tree.pack(fill=tk.BOTH, expand=True, pady=5)
+        self.themes_tree.bind("<<TreeviewSelect>>", self.on_theme_select)
+        
+        ttk.Label(themes_frame, textvariable=self.selected_themes_var, anchor="w").pack(fill=tk.X, pady=(0,5))
         
         # Page sessions
         sessions_frame = ttk.Frame(main_notebook, padding="10")
@@ -354,13 +364,46 @@ class QuizNetGUI:
     def update_themes(self, themes):
         """Met à jour l'affichage des thèmes"""
         self.themes = themes
-        self.themes_text.delete(1.0, tk.END)
+        for item in self.themes_tree.get_children():
+            self.themes_tree.delete(item)
         
         if themes:
             for theme in themes:
-                self.themes_text.insert(tk.END, f"• {theme.get('name')} (ID: {theme.get('id')})\n")
+                theme_id = theme.get("id")
+                name = theme.get("name")
+                if theme_id is None or name is None:
+                    continue
+                self.themes_tree.insert("", tk.END, iid=str(theme_id), values=(theme_id, name))
         else:
-            self.themes_text.insert(tk.END, "Aucun thème disponible")
+            self.selected_theme_ids = []
+        
+        self.update_selected_themes_label()
+
+    def on_theme_select(self, event=None):
+        """Gère la sélection des thèmes dans la liste"""
+        selection = self.themes_tree.selection()
+        ids = []
+        for item in selection:
+            try:
+                ids.append(int(item))
+            except ValueError:
+                continue
+        self.selected_theme_ids = ids
+        self.update_selected_themes_label()
+
+    def update_selected_themes_label(self):
+        """Met à jour le texte affichant la sélection de thèmes"""
+        if not self.selected_theme_ids:
+            self.selected_themes_var.set("Aucun thème sélectionné")
+            return
+        names = []
+        for theme_id in self.selected_theme_ids:
+            for theme in self.themes:
+                if theme.get("id") == theme_id:
+                    names.append(theme.get("name"))
+                    break
+        joined = ", ".join(f"{name} (ID {tid})" for name, tid in zip(names, self.selected_theme_ids))
+        self.selected_themes_var.set(f"Thèmes sélectionnés : {joined}")
     
     def refresh_sessions(self):
         """Actualise la liste des sessions"""
@@ -389,9 +432,16 @@ class QuizNetGUI:
         dialog.grab_set()
         
         # Thèmes
-        ttk.Label(dialog, text="Thèmes (IDs séparés par des virgules):").grid(row=0, column=0, sticky=tk.W, pady=5, padx=10)
-        themes_entry = ttk.Entry(dialog, width=30)
-        themes_entry.grid(row=0, column=1, pady=5, padx=10)
+        ttk.Label(dialog, text="Thèmes (sélection multiple possible):").grid(row=0, column=0, sticky=tk.W, pady=5, padx=10)
+        themes_listbox = tk.Listbox(dialog, selectmode=tk.MULTIPLE, height=8, exportselection=False)
+        themes_listbox.grid(row=0, column=1, pady=5, padx=10, sticky=(tk.W, tk.E))
+        scrollbar = ttk.Scrollbar(dialog, orient=tk.VERTICAL, command=themes_listbox.yview)
+        scrollbar.grid(row=0, column=2, sticky=(tk.N, tk.S))
+        themes_listbox.config(yscrollcommand=scrollbar.set)
+        for index, theme in enumerate(self.themes):
+            themes_listbox.insert(tk.END, f"[{theme.get('id')}] {theme.get('name')}")
+            if theme.get("id") in self.selected_theme_ids:
+                themes_listbox.selection_set(index)
         
         # Difficulté
         ttk.Label(dialog, text="Difficulté:").grid(row=1, column=0, sticky=tk.W, pady=5, padx=10)
@@ -432,7 +482,16 @@ class QuizNetGUI:
         
         def create():
             try:
-                theme_ids = [int(tid.strip()) for tid in themes_entry.get().split(",")]
+                selection = themes_listbox.curselection()
+                if not selection:
+                    messagebox.showwarning("Thèmes manquants", "Veuillez sélectionner au moins un thème")
+                    return
+                theme_ids = []
+                for idx in selection:
+                    try:
+                        theme_ids.append(int(self.themes[idx].get("id")))
+                    except (ValueError, IndexError, TypeError):
+                        continue
                 nb_questions = int(nb_questions_entry.get())
                 time_limit = int(time_limit_entry.get())
                 max_players = int(max_players_entry.get())

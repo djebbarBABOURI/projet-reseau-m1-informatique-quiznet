@@ -7,6 +7,10 @@ typedef struct {
 } ClientsInfo;
 
 int callback(void *NotUsed, int argc, char **argv, char **azColName){
+    (void)NotUsed;
+    (void)argc;
+    (void)argv;
+    (void)azColName;
     return 0;
 }
 
