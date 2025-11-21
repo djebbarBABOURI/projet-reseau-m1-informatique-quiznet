@@ -325,8 +325,8 @@ int main(int argc, char **argv)
       return 1;
   }
 
-  create_tables(db);
-  populate_db(db);
+//   create_tables(db);
+//   populate_db(db);
 
   while (1)
   {
