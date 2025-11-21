@@ -442,6 +442,17 @@ static void handle_client_request(const char *request, int client_fd, sqlite3 *d
         return;
     }
 
+    // Nettoyer le path : supprimer les caractères de fin de ligne et les slashes au début
+    size_t path_len = strlen(path);
+    while (path_len > 0 && (path[path_len - 1] == '\n' || path[path_len - 1] == '\r' || path[path_len - 1] == ' ')) {
+        path[path_len - 1] = '\0';
+        path_len--;
+    }
+    // Supprimer le slash au début si présent
+    if (path[0] == '/') {
+        memmove(path, path + 1, strlen(path));
+    }
+
     const char *json = strchr(request, '{');
     char pseudo[128] = {0};
     char password[256] = {0};
