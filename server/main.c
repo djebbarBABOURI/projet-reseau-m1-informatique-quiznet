@@ -155,6 +155,7 @@ static void send_register_success(int fd);
 static void send_login_success(int fd);
 static void send_error_response(int fd, const char *action, const char *status, const char *message);
 static void handle_themes_list(int fd, sqlite3 *db);
+static void handle_sessions_list(int fd, sqlite3 *db);
 static void handle_session_create(const char *json, int fd, sqlite3 *db);
 static bool extract_json_string(const char *json, const char *key, char *out, size_t outSize);
 static bool extract_json_int(const char *json, const char *key, int *out);
@@ -437,6 +438,8 @@ static void handle_client_request(const char *request, int client_fd, sqlite3 *d
     char method[8] = {0};
     char path[128] = {0};
 
+    printf("DEBUG: Requête reçue: %.*s\n", (int)(strlen(request) < 200 ? strlen(request) : 200), request);
+
     if (sscanf(request, "%7s %127s", method, path) != 2) {
         send_error_response(client_fd, "unknown", "400", "Bad request");
         return;
@@ -452,6 +455,8 @@ static void handle_client_request(const char *request, int client_fd, sqlite3 *d
     if (path[0] == '/') {
         memmove(path, path + 1, strlen(path));
     }
+    
+    printf("DEBUG: Method='%s', Path='%s'\n", method, path);
 
     const char *json = strchr(request, '{');
     char pseudo[128] = {0};
@@ -506,6 +511,12 @@ static void handle_client_request(const char *request, int client_fd, sqlite3 *d
 
     if (strcasecmp(method, "GET") == 0 && strcmp(path, "themes/list") == 0) {
         handle_themes_list(client_fd, db);
+        return;
+    }
+
+    if (strcasecmp(method, "GET") == 0 && strcmp(path, "sessions/list") == 0) {
+        printf("DEBUG: Requête GET sessions/list reçue, path='%s'\n", path);
+        handle_sessions_list(client_fd, db);
         return;
     }
 
@@ -781,6 +792,139 @@ static void handle_themes_list(int fd, sqlite3 *db)
 
     send(fd, json, length, 0);
     free(json);
+}
+
+static void handle_sessions_list(int fd, sqlite3 *db)
+{
+    printf("DEBUG: handle_sessions_list appelé\n");
+    // Requête SQL pour récupérer toutes les sessions avec le nombre de joueurs
+    const char *sql = 
+        "SELECT s.id, s.name, s.difficulty, s.nb_questions, s.time_limit, "
+        "s.mode, s.max_players, s.status, "
+        "COALESCE(COUNT(ps.id), 0) as nb_players "
+        "FROM sessions s "
+        "LEFT JOIN players_session ps ON s.id = ps.session_id "
+        "WHERE s.status = 'waiting' OR s.status = 'playing' "
+        "GROUP BY s.id, s.name, s.difficulty, s.nb_questions, s.time_limit, s.mode, s.max_players, s.status "
+        "ORDER BY s.id;";
+    
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+        fprintf(stderr, "DEBUG: Erreur prepare SQL: %s\n", sqlite3_errmsg(db));
+        send_error_response(fd, "sessions/list", "500", "database error");
+        return;
+    }
+    printf("DEBUG: Requête SQL préparée avec succès\n");
+
+    size_t capacity = 4096;
+    size_t length = 0;
+    char *json = malloc(capacity);
+    if (!json) {
+        sqlite3_finalize(stmt);
+        send_error_response(fd, "sessions/list", "500", "memory error");
+        return;
+    }
+    json[0] = '\0';
+
+    bool ok = append_str(&json, &length, &capacity, "{\"action\":\"sessions/list\",\"statut\":\"200\",\"sessions\":[");
+    bool first = true;
+    int row_count = 0;
+
+    while (ok) {
+        int rc = sqlite3_step(stmt);
+        if (rc == SQLITE_ROW) {
+            row_count++;
+            if (!first) {
+                ok = append_char(&json, &length, &capacity, ',');
+                if (!ok) break;
+            }
+            first = false;
+            
+            int id = sqlite3_column_int(stmt, 0);
+            const unsigned char *name = sqlite3_column_text(stmt, 1);
+            const unsigned char *difficulty = sqlite3_column_text(stmt, 2);
+            int nb_questions = sqlite3_column_int(stmt, 3);
+            int time_limit = sqlite3_column_int(stmt, 4);
+            const unsigned char *mode = sqlite3_column_text(stmt, 5);
+            int max_players = sqlite3_column_int(stmt, 6);
+            // const unsigned char *status = sqlite3_column_text(stmt, 7);
+            const unsigned char *status_raw = sqlite3_column_text(stmt, 7);
+            const unsigned char *status = status_raw ? status_raw : (const unsigned char*)"waiting";
+            int nb_players = sqlite3_column_int(stmt, 8);
+
+            char id_buf[32], nb_questions_buf[32], time_limit_buf[32], max_players_buf[32], nb_players_buf[32];
+            snprintf(id_buf, sizeof(id_buf), "%d", id);
+            snprintf(nb_questions_buf, sizeof(nb_questions_buf), "%d", nb_questions);
+            snprintf(time_limit_buf, sizeof(time_limit_buf), "%d", time_limit);
+            snprintf(max_players_buf, sizeof(max_players_buf), "%d", max_players);
+            snprintf(nb_players_buf, sizeof(nb_players_buf), "%d", nb_players);
+
+            ok = append_str(&json, &length, &capacity, "{\"id\":");
+            if (!ok) break;
+            ok = append_str(&json, &length, &capacity, id_buf);
+            if (!ok) break;
+            ok = append_str(&json, &length, &capacity, ",\"name\":\"");
+            if (!ok) break;
+            ok = append_json_string(&json, &length, &capacity, name ? name : (const unsigned char *)"");
+            if (!ok) break;
+            ok = append_str(&json, &length, &capacity, "\",\"difficulty\":\"");
+            if (!ok) break;
+            ok = append_json_string(&json, &length, &capacity, difficulty ? difficulty : (const unsigned char *)"");
+            if (!ok) break;
+            ok = append_str(&json, &length, &capacity, "\",\"nbQuestions\":");
+            if (!ok) break;
+            ok = append_str(&json, &length, &capacity, nb_questions_buf);
+            if (!ok) break;
+            ok = append_str(&json, &length, &capacity, ",\"timeLimit\":");
+            if (!ok) break;
+            ok = append_str(&json, &length, &capacity, time_limit_buf);
+            if (!ok) break;
+            ok = append_str(&json, &length, &capacity, ",\"mode\":\"");
+            if (!ok) break;
+            ok = append_json_string(&json, &length, &capacity, mode ? mode : (const unsigned char *)"");
+            if (!ok) break;
+            ok = append_str(&json, &length, &capacity, "\",\"maxPlayers\":");
+            if (!ok) break;
+            ok = append_str(&json, &length, &capacity, max_players_buf);
+            if (!ok) break;
+            ok = append_str(&json, &length, &capacity, ",\"nbPlayers\":");
+            if (!ok) break;
+            ok = append_str(&json, &length, &capacity, nb_players_buf);
+            if (!ok) break;
+            ok = append_str(&json, &length, &capacity, ",\"status\":\"");
+            if (!ok) break;
+            ok = append_json_string(&json, &length, &capacity, status ? status : (const unsigned char *)"");
+            if (!ok) break;
+            ok = append_str(&json, &length, &capacity, "\"}");
+        } else if (rc == SQLITE_DONE) {
+            break;
+        } else {
+            ok = false;
+            break;
+        }
+    }
+
+    sqlite3_finalize(stmt);
+
+    printf("DEBUG: Nombre de sessions trouvées: %d\n", row_count);
+
+    if (!ok) {
+        free(json);
+        send_error_response(fd, "sessions/list", "500", "internal error");
+        return;
+    }
+
+    if (!append_str(&json, &length, &capacity, "]}\n")) {
+        free(json);
+        send_error_response(fd, "sessions/list", "500", "internal error");
+        return;
+    }
+
+    printf("DEBUG: Réponse JSON générée, longueur: %zu\n", length);
+    printf("DEBUG: Réponse JSON: %.*s\n", (int)(length < 500 ? length : 500), json);
+    send(fd, json, length, 0);
+    free(json);
+    printf("DEBUG: Réponse envoyée au client\n");
 }
 
 // Fonction pour extraire un entier JSON

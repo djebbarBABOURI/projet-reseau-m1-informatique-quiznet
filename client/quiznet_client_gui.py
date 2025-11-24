@@ -553,7 +553,6 @@ class QuizNetGUI:
         """Met à jour l'affichage des sessions"""
         self.sessions = sessions
         self.sessions_listbox.delete(0, tk.END)
-        
         for session in sessions:
             status_emoji = "🟢" if session.get("status") == "waiting" else "🟡" if session.get("status") == "playing" else "🔴"
             session_text = f"{status_emoji} [{session.get('id')}] {session.get('name')} - {session.get('nbPlayers')}/{session.get('maxPlayers')} - {session.get('mode')}"
@@ -743,7 +742,7 @@ class QuizNetGUI:
                             # Succès - fermer la dialog et afficher la salle d'attente
                             self.root.after(0, lambda: dialog.destroy())
                             self.root.after(0, lambda: status_label.config(text="✅ Session créée avec succès !", 
-                                                                          foreground=self.colors['success']))
+                                                                          foreground=self.colors['success']if status_label.winfo_exists() else None))
                             self.root.after(0, self.show_waiting_room)
                             # Rafraîchir la liste des sessions
                             self.root.after(0, self.refresh_sessions)
@@ -789,7 +788,7 @@ class QuizNetGUI:
                             self.root.after(0, lambda: create_btn.config(state=tk.NORMAL))
                             self.root.after(0, lambda: status_label.config(
                                 text=f"❌ {error_msg}", 
-                                foreground=self.colors['danger']))
+                                foreground=self.colors['danger'])if status_label.winfo_exists() else None)
                             self.root.after(0, lambda msg=detailed_msg: messagebox.showerror("Erreur de création", msg))
                     except Exception as e:
                         # Erreur inattendue
