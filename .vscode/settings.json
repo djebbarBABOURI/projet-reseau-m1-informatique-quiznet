@@ -1,5 +1,6 @@
 {
     "files.associations": {
-        "sql.h": "c"
+        "sql.h": "c",
+        "types.h": "c"
     }
 }
