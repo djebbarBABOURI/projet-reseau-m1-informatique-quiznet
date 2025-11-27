@@ -10,7 +10,7 @@
 #include <sys/socket.h>
 #include "db_utils.h"
 #include "utils.h"
-
+#include "clients.h"
 //
 bool request_is_complete(const char *buffer)
 {
@@ -103,6 +103,11 @@ void handle_client_request(const char *request, int client_fd, sqlite3 *db)
         int rc = register_player(db, pseudo, password_hash);
         if (rc == 0) {
             send_register_success(client_fd);
+            int player_id = get_player_id_by_pseudo(db, pseudo);
+            if (player_id > 0) {
+                add_authenticated_client(client_fd, player_id);
+                print_authenticated_clients();
+            }
         } else if (rc == 1) {
             send_error_response(client_fd, "player/register", "409", "pseudo already exists");
         } else {
@@ -124,6 +129,11 @@ void handle_client_request(const char *request, int client_fd, sqlite3 *db)
         char password_hash[65];
         hash_password(password, password_hash);
         int rc = verify_player(db, pseudo, password_hash);
+        int player_id = get_player_id_by_pseudo(db, pseudo);
+        if (player_id > 0) {
+            add_authenticated_client(client_fd, player_id);
+            print_authenticated_clients();
+        }
         if (rc == 0) {
             send_login_success(client_fd);
         } else if (rc == 1) {
@@ -151,6 +161,66 @@ void handle_client_request(const char *request, int client_fd, sqlite3 *db)
             return;
         }
         handle_session_create(json, client_fd, db);
+        return;
+    }
+
+    if (strcasecmp(method, "POST") == 0 && strcmp(path, "session/join") == 0) {
+        if (!json) {
+            send_error_response(client_fd, "session/join", "400", "Missing JSON body");
+            return;
+        }
+
+        // Extraire sessionId
+        int session_id = 0;
+        if (!extract_json_int(json, "sessionId", &session_id)) {
+            send_error_response(client_fd, "session/join", "400", "Missing or invalid sessionId");
+            return;
+        }
+
+        // Récupérer l'ID du joueur à partir du client_fd
+        int player_id = get_player_id_by_fd(client_fd); // clients.c
+        if (player_id <= 0) {
+            send_error_response(client_fd, "session/join", "401", "Player not authenticated");
+            return;
+        }
+
+        // Vérifier que la session existe
+        sqlite3_stmt *stmt;
+        const char *sql = "SELECT mode, max_players, status, created_by FROM sessions WHERE id = ?";
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+            send_error_response(client_fd, "session/join", "500", "Database error");
+            return;
+        }
+        sqlite3_bind_int(stmt, 1, session_id);
+
+        int rc = sqlite3_step(stmt);
+        if (rc != SQLITE_ROW) {
+            sqlite3_finalize(stmt);
+            send_error_response(client_fd, "session/join", "404", "Session not found");
+            return;
+        }
+
+        const char *mode = (const char *)sqlite3_column_text(stmt, 0);
+        int max_players = sqlite3_column_int(stmt, 1);
+        const char *status = (const char *)sqlite3_column_text(stmt, 2);
+        int creator_id = sqlite3_column_int(stmt, 3);
+
+        sqlite3_finalize(stmt);
+        if (creator_id == player_id) {
+            send_error_response(client_fd, "session/join", "403", "Creator cannot join their own session");
+            return;
+        }
+
+        // Vérifier si session complète
+        int current_players = count_players_in_session(db, session_id);
+        if (current_players >= max_players) {
+            send_error_response(client_fd, "session/join", "403", "Session is full");
+            return;
+        }
+
+        // Appeler join_session
+        join_session(client_fd, db, player_id, session_id);
+
         return;
     }
 

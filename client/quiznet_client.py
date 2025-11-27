@@ -14,6 +14,7 @@ import select
 from typing import Optional, Dict, List, Any
 from datetime import datetime
 from queue import Queue
+from tkinter import messagebox
 
 # Configuration
 UDP_PORT = 5555
@@ -471,7 +472,20 @@ class QuizNetClient:
                     "action": "session/create"
                 }
             return None
-    
+    # def join_session(self, session_id: int) -> bool:
+    # """Envoie une requête pour rejoindre une session existante"""
+    # response = self._send_request("POST", "session/join", {
+    #     "sessionId": session_id
+    # })
+
+    # if response and response.get("statut") == "200":
+    #     print(f"✓ Rejoint la session {session_id} avec succès")
+    #     return True
+    # else:
+    #     message = response.get("message", "Erreur inconnue") if response else "Pas de réponse"
+    #     print(f"❌ Erreur en rejoignant la session {session_id}: {message}")
+    #     return False
+
     def join_session(self, session_id: int) -> bool:
         """Rejoint une session existante"""
         response = self._send_request("POST", "session/join", {
@@ -493,9 +507,15 @@ class QuizNetClient:
             print(f"✓ Rejoint la session {session_id}")
             return True
         else:
-            message = response.get("message", "Erreur inconnue") if response else "Pas de réponse"
-            print(f"❌ Erreur de connexion à la session: {message}")
+            if response and response.get("statut") == "403":
+                message = response.get("message", "Accès interdit à cette session")
+                messagebox.showerror("Erreur", message)
+            else:
+                message = response.get("message", "Erreur inconnue") if response else "Pas de réponse"
+                messagebox.showerror("Erreur de connexion", message)
+
             return False
+
     
     def start_session(self) -> bool:
         """Démarre la session (créateur uniquement)"""

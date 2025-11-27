@@ -12,6 +12,7 @@
 #include <stddef.h>
 #include <sys/types.h>
 #include "utils.h"
+#include "clients.h"
 
 void create_tables(sqlite3 *db) {
     const char *sql_statements[] = {
@@ -477,22 +478,22 @@ int link_themes_to_session(sqlite3 *db, int session_id, int *theme_ids, size_t t
 }
 
 // Obtenir l'ID d'un joueur par son pseudo
-static int get_player_id_by_pseudo(sqlite3 *db, const char *pseudo)
-{
-    const char *sql = "SELECT id FROM players WHERE pseudo = ?;";
-    sqlite3_stmt *stmt;
-    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) {
-        return -1;
-    }
-    sqlite3_bind_text(stmt, 1, pseudo, -1, SQLITE_TRANSIENT);
-    int rc = sqlite3_step(stmt);
-    int player_id = -1;
-    if (rc == SQLITE_ROW) {
-        player_id = sqlite3_column_int(stmt, 0);
-    }
-    sqlite3_finalize(stmt);
-    return player_id;
-}
+// int get_player_id_by_pseudo(sqlite3 *db, const char *pseudo)
+// {
+//     const char *sql = "SELECT id FROM players WHERE pseudo = ?;";
+//     sqlite3_stmt *stmt;
+//     if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+//         return -1;
+//     }
+//     sqlite3_bind_text(stmt, 1, pseudo, -1, SQLITE_TRANSIENT);
+//     int rc = sqlite3_step(stmt);
+//     int player_id = -1;
+//     if (rc == SQLITE_ROW) {
+//         player_id = sqlite3_column_int(stmt, 0);
+//     }
+//     sqlite3_finalize(stmt);
+//     return player_id;
+// }
 
 // Créer une session dans la base de données
 static int create_session_in_db(sqlite3 *db, const char *name, const char *difficulty, 
@@ -523,4 +524,142 @@ static int create_session_in_db(sqlite3 *db, const char *name, const char *diffi
     *session_id = (int)sqlite3_last_insert_rowid(db);
     sqlite3_finalize(stmt);
     return 0;
+}
+
+
+// Renvoie le nombre de joueurs dans une session
+int get_nb_players(sqlite3 *db, int session_id) {
+    sqlite3_stmt *stmt;
+    const char *sql = "SELECT COUNT(*) FROM players_session WHERE session_id = ?";
+    int nb = 0;
+
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+        sqlite3_bind_int(stmt, 1, session_id);
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            nb = sqlite3_column_int(stmt, 0);
+        }
+    }
+    sqlite3_finalize(stmt);
+    return nb;
+}
+
+// Renvoie le mode d'une session
+bool get_session_mode(sqlite3 *db, int session_id, char *mode, size_t mode_len) {
+    sqlite3_stmt *stmt;
+    const char *sql = "SELECT mode FROM sessions WHERE id = ?";
+    bool found = false;
+
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+        sqlite3_bind_int(stmt, 1, session_id);
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            const unsigned char *m = sqlite3_column_text(stmt, 0);
+            strncpy(mode, (const char *)m, mode_len - 1);
+            mode[mode_len - 1] = '\0';
+            found = true;
+        }
+    }
+    sqlite3_finalize(stmt);
+    return found;
+}
+
+int get_player_id_by_pseudo(sqlite3 *db, const char *pseudo) {
+    if (!db || !pseudo) return -1;
+
+    const char *sql = "SELECT id FROM players WHERE pseudo = ?;";
+    sqlite3_stmt *stmt = NULL;
+    int player_id = -1;
+
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+        return -1;
+    }
+
+    if (sqlite3_bind_text(stmt, 1, pseudo, -1, SQLITE_STATIC) != SQLITE_OK) {
+        sqlite3_finalize(stmt);
+        return -1;
+    }
+
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        player_id = sqlite3_column_int(stmt, 0);
+    }
+
+    sqlite3_finalize(stmt);
+    return player_id;
+}
+
+// Fonction principale pour rejoindre une session
+void join_session(int fd, sqlite3 *db, int player_id, int session_id) {
+    char mode[16];
+    if (!get_session_mode(db, session_id, mode, sizeof(mode))) {
+        send_error_response(fd, "session/join", "404", "session not found");
+        return;
+    }
+
+    // Vérifier le nombre de joueurs
+    sqlite3_stmt *stmt;
+    const char *sql_max = "SELECT max_players FROM sessions WHERE id = ?";
+    int max_players = 0;
+    if (sqlite3_prepare_v2(db, sql_max, -1, &stmt, NULL) == SQLITE_OK) {
+        sqlite3_bind_int(stmt, 1, session_id);
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            max_players = sqlite3_column_int(stmt, 0);
+        }
+    }
+    sqlite3_finalize(stmt);
+
+    int nb_players = get_nb_players(db, session_id);
+    if (nb_players >= max_players) {
+        send_error_response(fd, "session/join", "403", "session is full");
+        return;
+    }
+
+    // Ajouter le joueur à players_session
+    const char *sql_insert = "INSERT INTO players_session (player_id, session_id, lives, current_score, is_creator) VALUES (?, ?, ?, 0, 0)";
+    if (sqlite3_prepare_v2(db, sql_insert, -1, &stmt, NULL) == SQLITE_OK) {
+        int lives = strcmp(mode, "battle") == 0 ? 3 : 0; // par défaut 3 vies pour battle
+        sqlite3_bind_int(stmt, 1, player_id);
+        sqlite3_bind_int(stmt, 2, session_id);
+        sqlite3_bind_int(stmt, 3, lives);
+        sqlite3_step(stmt);
+    }
+    sqlite3_finalize(stmt);
+
+    // Récupérer l'id du joueur_session
+    int players_session_id = (int)sqlite3_last_insert_rowid(db);
+
+    // Créer jokers si mode battle
+    if (strcmp(mode, "battle") == 0) {
+        const char *sql_jokers = "INSERT INTO jokers (players_session_id, fifty, skip) VALUES (?, 1, 1)";
+        if (sqlite3_prepare_v2(db, sql_jokers, -1, &stmt, NULL) == SQLITE_OK) {
+            sqlite3_bind_int(stmt, 1, players_session_id);
+            sqlite3_step(stmt);
+        }
+        sqlite3_finalize(stmt);
+    }
+
+    // Construire la réponse JSON
+    char response[1024];
+    snprintf(response, sizeof(response),
+             "{\"action\":\"session/join\",\"statut\":\"201\",\"message\":\"session joined\","
+             "\"sessionId\":%d,\"mode\":\"%s\",\"isCreator\":false,\"players\":[],\"lives\":%d,\"jokers\":{\"fifty\":1,\"skip\":1}}",
+             session_id, mode, strcmp(mode, "battle") == 0 ? 3 : 0);
+
+    send(fd, response, strlen(response), 0);
+
+    // TODO: envoyer POST session/player/joined à tous les autres joueurs
+}
+
+int count_players_in_session(void* db, int session_id) {
+    int count = 0;
+    // Exemple pour SQLite
+    sqlite3_stmt *stmt;
+    const char *sql = "SELECT COUNT(*) FROM session_players WHERE session_id = ?;";
+
+    if (sqlite3_prepare_v2((sqlite3*)db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+        sqlite3_bind_int(stmt, 1, session_id);
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            count = sqlite3_column_int(stmt, 0);
+        }
+    }
+    sqlite3_finalize(stmt);
+    return count;
 }
