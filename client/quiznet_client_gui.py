@@ -1029,8 +1029,10 @@ class QuizNetGUI:
                             self.root.after(0, lambda: status_label.config(text="✅ Session créée avec succès !", 
                                                                           foreground=self.colors['success']if status_label.winfo_exists() else None))
                             self.root.after(0, self.show_waiting_room)
-                            # Rafraîchir la liste des sessions
-                            self.root.after(0, self.refresh_sessions)
+                            # Rafraîchir la liste des sessions après un court délai pour permettre au serveur de finaliser
+                            self.root.after(100, self.refresh_sessions)
+                            # Rafraîchir à nouveau après un délai plus long pour s'assurer que la session apparaît
+                            self.root.after(500, self.refresh_sessions)
                         else:
                             # Échec - réactiver le bouton et afficher l'erreur détaillée
                             # Récupérer le message d'erreur du serveur
