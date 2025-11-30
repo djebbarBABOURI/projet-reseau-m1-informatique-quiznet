@@ -1179,6 +1179,7 @@ class QuizNetGUI:
     def handle_push_message_gui(self, header: str, data: Dict):
         """Gère les messages push du serveur (version GUI)"""
         action = data.get("action", "")
+        print(f"DEBUG handle_push_message_gui: action={action}, data={data}")
         
         if action == "session/player/joined":
             pseudo = data.get("pseudo", "")
@@ -1187,14 +1188,29 @@ class QuizNetGUI:
                 tk.END, f"🎮 {pseudo} a rejoint la session ({nb_players} joueur(s))\n"))
             self.root.after(0, lambda: self.waiting_text.see(tk.END))
         
+        elif action == "session/ready":
+            # Message pour le créateur indiquant que la session est prête
+            message = data.get("message", "Session prête à démarrer")
+            nb_players = data.get("nbPlayers", 0)
+            if self.client.is_creator:
+                self.root.after(0, lambda: self.waiting_text.insert(
+                    tk.END, f"✅ {message} ({nb_players} joueur(s))\n"))
+                self.root.after(0, lambda: self.waiting_text.see(tk.END))
+                self.root.after(0, lambda: self.start_button.config(state=tk.NORMAL))
+        
         elif action == "session/started":
+            print(f"DEBUG handle_push_message_gui: session/started reçu, basculement vers page de jeu")
+            print(f"DEBUG handle_push_message_gui: countdown={data.get('countdown', 3)}")
             self.client.in_game = True
+            # Basculer immédiatement vers la page de jeu
             self.root.after(0, self.start_game)
         
         elif action == "question/new":
+            print(f"DEBUG handle_push_message_gui: question/new reçu, data={data}")
             self.client.current_question = data
             self.client.question_start_time = time.time()
             self.client.time_limit = data.get("timeLimit", self.client.time_limit)
+            print(f"DEBUG handle_push_message_gui: time_limit={self.client.time_limit}")
             self.root.after(0, lambda: self.display_question(data))
         
         elif action == "question/results":
@@ -1236,12 +1252,37 @@ class QuizNetGUI:
     
     def start_game(self):
         """Démarre le jeu"""
-        self.notebook.select(3)  # Page de jeu
+        print("DEBUG start_game: Démarrage du jeu, basculement vers page de jeu")
+        # Rendre la page de jeu visible si elle était cachée
+        try:
+            # Rendre l'onglet visible (si caché avec hide)
+            self.notebook.tab(3, state='normal')
+            print("DEBUG start_game: Onglet rendu visible")
+        except Exception as e:
+            print(f"DEBUG start_game: Erreur rendant l'onglet visible: {e}")
+        
+        # Sélectionner la page de jeu
+        try:
+            self.notebook.select(3)  # Page de jeu (index 3)
+            current_index = self.notebook.index('current')
+            print(f"DEBUG start_game: Page de jeu sélectionnée, index actuel: {current_index}")
+        except Exception as e:
+            print(f"DEBUG start_game: Erreur sélection de la page: {e}")
+            # Essayer avec le nom de l'onglet
+            try:
+                self.notebook.select("Jeu")
+                print("DEBUG start_game: Page sélectionnée par nom 'Jeu'")
+            except Exception as e2:
+                print(f"DEBUG start_game: Impossible de sélectionner la page de jeu: {e2}")
+        
+        # Mettre à jour le texte des résultats
         self.results_text.delete(1.0, tk.END)
         self.results_text.insert(tk.END, "🎯 La session a commencé !\n\n")
+        print("DEBUG start_game: Page de jeu configurée")
     
     def display_question(self, question_data: Dict):
         """Affiche une question"""
+        print(f"DEBUG display_question: question_data={question_data}")
         self.client.current_question = question_data
         self.client.question_start_time = time.time()
         self.answered = False

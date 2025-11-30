@@ -34,4 +34,7 @@ bool get_session_mode(sqlite3 *db, int session_id, char *mode, size_t mode_len);
 void join_session(int fd, sqlite3 *db, int player_id, int session_id);
 int get_player_id_by_pseudo(sqlite3 *db, const char *pseudo);
 int count_players_in_session(void* db, int session_id);
+bool is_session_creator(sqlite3 *db, int session_id, int player_id);
+int update_session_status(sqlite3 *db, int session_id, const char *status);
+int select_questions_for_session(sqlite3 *db, int session_id, int nb_questions);
 #endif

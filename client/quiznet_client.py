@@ -239,6 +239,10 @@ class QuizNetClient:
                             else:
                                 buffer = buffer[json_end:].lstrip()
                             
+                            # Debug: afficher tous les messages reçus
+                            if message.startswith("POST ") or message.startswith("GET "):
+                                print(f"DEBUG _listen_server: Message push reçu: {message[:150]}")
+                            
                             self._process_message(message)
                             message_processed = True
                     
@@ -259,13 +263,19 @@ class QuizNetClient:
             return
         
         try:
+            # Debug: afficher le message reçu
+            if message.startswith("POST question") or message.startswith("POST session"):
+                print(f"DEBUG _process_message: Message reçu: {message[:200]}")
+            
             # Extraire le JSON du message
             json_start = message.find("{")
             if json_start == -1:
+                print(f"DEBUG _process_message: Pas de JSON trouvé dans: {message[:100]}")
                 return
             
             json_text = message[json_start:]
             data = json.loads(json_text)
+            print(f"DEBUG _process_message: JSON parsé, action={data.get('action', 'N/A')}")
             
             # Liste des actions qui sont des messages push (événements du serveur)
             push_actions = [
@@ -302,8 +312,12 @@ class QuizNetClient:
     def _handle_push_message(self, header: str, data: Dict):
         """Gère les messages push du serveur"""
         try:
+            action = data.get("action", "")
+            print(f"DEBUG _handle_push_message: action={action}, has_callback={self.push_callback is not None}")
+            
             # Si un callback est défini (pour GUI), l'appeler
             if self.push_callback:
+                print(f"DEBUG _handle_push_message: Appel du callback GUI pour action={action}")
                 self.push_callback(header, data)
                 return
             
@@ -317,6 +331,7 @@ class QuizNetClient:
                     print(f"\n🎮 {pseudo} a rejoint la session ({nb_players} joueur(s))")
             
             elif action == "session/started":
+                print(f"DEBUG _handle_push_message: session/started reçu, countdown={data.get('countdown', 3)}")
                 self.in_game = True
                 countdown = data.get("countdown", 3)
                 print(f"\n🚀 La session démarre dans {countdown} secondes...")

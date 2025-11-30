@@ -138,10 +138,34 @@ const char *themes_names[20] = {
 
 
 void populate_db(sqlite3 *db) {
+    printf("DEBUG populate_db: Début du peuplement de la base de données...\n");
+    
     for (int t = 0; t < 20; t++) {
-        if (insert_theme(db, themes_names[t]) != SQLITE_OK) continue;
-        int theme_id = (int)sqlite3_last_insert_rowid(db);
+        if (insert_theme(db, themes_names[t]) != SQLITE_OK) {
+            printf("DEBUG populate_db: Erreur insertion thème %d: %s\n", t, themes_names[t]);
+            continue;
+        }
+        
+        // Récupérer l'ID du thème (soit nouvellement créé, soit existant)
+        int theme_id = -1;
+        const char *sql_get_id = "SELECT id FROM themes WHERE name = ?";
+        sqlite3_stmt *stmt;
+        if (sqlite3_prepare_v2(db, sql_get_id, -1, &stmt, NULL) == SQLITE_OK) {
+            sqlite3_bind_text(stmt, 1, themes_names[t], -1, SQLITE_STATIC);
+            if (sqlite3_step(stmt) == SQLITE_ROW) {
+                theme_id = sqlite3_column_int(stmt, 0);
+            }
+        }
+        sqlite3_finalize(stmt);
+        
+        if (theme_id <= 0) {
+            printf("DEBUG populate_db: Impossible de récupérer l'ID du thème %s\n", themes_names[t]);
+            continue;
+        }
+        
+        printf("DEBUG populate_db: Thème %d: %s (id=%d)\n", t, themes_names[t], theme_id);
 
+        int questions_inserted = 0;
         for (int q = 0; q < 10; q++) {
             Question *qn = &all_questions[t][q];
 
@@ -151,15 +175,39 @@ void populate_db(sqlite3 *db) {
                                 qn->type,
                                 qn->question,
                                 qn->options,
-                                qn->answer) != SQLITE_OK) {
+                                qn->answer) == SQLITE_OK) {
+                questions_inserted++;
+            } else {
                 fprintf(stderr, "Erreur insertion question %d thème %d (type='%s')\n", q, t, qn->type);
             }
         }
+        printf("DEBUG populate_db: %d questions insérées pour le thème %s\n", questions_inserted, themes_names[t]);
     }
+    
+    printf("DEBUG populate_db: Peuplement terminé\n");
 }
 
-// Fonction pour ajouter un thème
+// Fonction pour ajouter un thème (ignore si déjà existant)
 int insert_theme(sqlite3 *db, const char *name) {
+    // Vérifier d'abord si le thème existe déjà
+    const char *sql_check = "SELECT id FROM themes WHERE name = ?";
+    sqlite3_stmt *stmt;
+    int theme_id = -1;
+    
+    if (sqlite3_prepare_v2(db, sql_check, -1, &stmt, NULL) == SQLITE_OK) {
+        sqlite3_bind_text(stmt, 1, name, -1, SQLITE_STATIC);
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            theme_id = sqlite3_column_int(stmt, 0);
+        }
+    }
+    sqlite3_finalize(stmt);
+    
+    // Si le thème existe déjà, retourner son ID
+    if (theme_id > 0) {
+        return SQLITE_OK;
+    }
+    
+    // Sinon, l'insérer
     char sql[256];
     snprintf(sql, sizeof(sql),
              "INSERT INTO themes(name) VALUES('%s');", name);
@@ -351,12 +399,21 @@ void handle_session_create(const char *json, int fd, sqlite3 *db)
         return;
     }
     
-    // Obtenir l'ID du joueur
-    int player_id = get_player_id_by_pseudo(db, pseudo);
-    if (player_id < 0) {
+    // Obtenir l'ID du joueur depuis le fd (joueur authentifié)
+    // C'est plus sûr que d'utiliser le pseudo du JSON qui pourrait être incorrect
+    int player_id = get_player_id_by_fd(fd);
+    printf("DEBUG handle_session_create: pseudo='%s', player_id (from fd)=%d, fd=%d\n", pseudo, player_id, fd);
+    if (player_id <= 0) {
         if (theme_ids) free(theme_ids);
-        send_error_response(fd, "session/create", "404", "Player not found");
+        send_error_response(fd, "session/create", "401", "Player not authenticated");
         return;
+    }
+    
+    // Vérifier aussi le player_id depuis le pseudo pour comparaison (debug)
+    int player_id_from_pseudo = get_player_id_by_pseudo(db, pseudo);
+    printf("DEBUG handle_session_create: player_id_from_pseudo=%d\n", player_id_from_pseudo);
+    if (player_id_from_pseudo > 0 && player_id_from_pseudo != player_id) {
+        printf("DEBUG handle_session_create: ATTENTION - player_id mismatch! pseudo donne %d mais fd donne %d\n", player_id_from_pseudo, player_id);
     }
     
     // Créer la session
@@ -612,13 +669,17 @@ void join_session(int fd, sqlite3 *db, int player_id, int session_id) {
         return;
     }
 
+    // Vérifier si le joueur est le créateur de la session
+    bool is_creator = is_session_creator(db, session_id, player_id);
+    
     // Ajouter le joueur à players_session
-    const char *sql_insert = "INSERT INTO players_session (player_id, session_id, lives, current_score, is_creator) VALUES (?, ?, ?, 0, 0)";
+    const char *sql_insert = "INSERT INTO players_session (player_id, session_id, lives, current_score, is_creator) VALUES (?, ?, ?, 0, ?)";
     if (sqlite3_prepare_v2(db, sql_insert, -1, &stmt, NULL) == SQLITE_OK) {
-        int lives = strcmp(mode, "battle") == 0 ? 3 : 0; // par défaut 3 vies pour battle
+        int lives = strcmp(mode, "battle") == 0 ? 4 : 0; // 4 vies en mode battle selon le protocole
         sqlite3_bind_int(stmt, 1, player_id);
         sqlite3_bind_int(stmt, 2, session_id);
         sqlite3_bind_int(stmt, 3, lives);
+        sqlite3_bind_int(stmt, 4, is_creator ? 1 : 0);
         sqlite3_step(stmt);
     }
     sqlite3_finalize(stmt);
@@ -626,33 +687,98 @@ void join_session(int fd, sqlite3 *db, int player_id, int session_id) {
     // Récupérer l'id du joueur_session
     int players_session_id = (int)sqlite3_last_insert_rowid(db);
 
-    // Créer jokers si mode battle
-    if (strcmp(mode, "battle") == 0) {
-        const char *sql_jokers = "INSERT INTO jokers (players_session_id, fifty, skip) VALUES (?, 1, 1)";
-        if (sqlite3_prepare_v2(db, sql_jokers, -1, &stmt, NULL) == SQLITE_OK) {
-            sqlite3_bind_int(stmt, 1, players_session_id);
-            sqlite3_step(stmt);
-        }
-        sqlite3_finalize(stmt);
+    // Créer jokers (toujours créer les jokers, même en mode solo selon le protocole)
+    const char *sql_jokers = "INSERT INTO jokers (players_session_id, fifty, skip) VALUES (?, 1, 1)";
+    if (sqlite3_prepare_v2(db, sql_jokers, -1, &stmt, NULL) == SQLITE_OK) {
+        sqlite3_bind_int(stmt, 1, players_session_id);
+        sqlite3_step(stmt);
     }
+    sqlite3_finalize(stmt);
 
     // Construire la réponse JSON
+    int lives = strcmp(mode, "battle") == 0 ? 4 : 0;
     char response[1024];
-    snprintf(response, sizeof(response),
-             "{\"action\":\"session/join\",\"statut\":\"201\",\"message\":\"session joined\","
-             "\"sessionId\":%d,\"mode\":\"%s\",\"isCreator\":false,\"players\":[],\"lives\":%d,\"jokers\":{\"fifty\":1,\"skip\":1}}",
-             session_id, mode, strcmp(mode, "battle") == 0 ? 3 : 0);
+    if (strcmp(mode, "battle") == 0) {
+        snprintf(response, sizeof(response),
+                 "{\"action\":\"session/join\",\"statut\":\"201\",\"message\":\"session joined\","
+                 "\"sessionId\":%d,\"mode\":\"%s\",\"isCreator\":%s,\"players\":[],\"lives\":%d,\"jokers\":{\"fifty\":1,\"skip\":1}}",
+                 session_id, mode, is_creator ? "true" : "false", lives);
+    } else {
+        snprintf(response, sizeof(response),
+                 "{\"action\":\"session/join\",\"statut\":\"201\",\"message\":\"session joined\","
+                 "\"sessionId\":%d,\"mode\":\"%s\",\"isCreator\":%s,\"players\":[],\"jokers\":{\"fifty\":1,\"skip\":1}}",
+                 session_id, mode, is_creator ? "true" : "false");
+    }
 
     send(fd, response, strlen(response), 0);
 
-    // TODO: envoyer POST session/player/joined à tous les autres joueurs
+    // Envoyer POST session/player/joined à tous les autres joueurs
+    // Récupérer le pseudo du joueur qui vient de rejoindre
+    const char *sql_pseudo = "SELECT pseudo FROM players WHERE id = ?";
+    sqlite3_stmt *stmt_pseudo;
+    char player_pseudo[128] = {0};
+    if (sqlite3_prepare_v2(db, sql_pseudo, -1, &stmt_pseudo, NULL) == SQLITE_OK) {
+        sqlite3_bind_int(stmt_pseudo, 1, player_id);
+        if (sqlite3_step(stmt_pseudo) == SQLITE_ROW) {
+            const unsigned char *p = sqlite3_column_text(stmt_pseudo, 0);
+            if (p) {
+                strncpy(player_pseudo, (const char *)p, sizeof(player_pseudo) - 1);
+            }
+        }
+    }
+    sqlite3_finalize(stmt_pseudo);
+    
+    // Compter le nouveau nombre de joueurs
+    int new_nb_players = get_nb_players(db, session_id);
+    
+    // Envoyer le message à tous les autres joueurs de la session
+    char joined_message[512];
+    snprintf(joined_message, sizeof(joined_message),
+        "POST session/player/joined\n{\"action\":\"session/player/joined\",\"pseudo\":\"%s\",\"nbPlayers\":%d}\n",
+        player_pseudo, new_nb_players);
+    
+    // Récupérer tous les FDs de la session sauf celui qui vient de rejoindre
+    int fds[100];
+    int count = get_session_fds(db, session_id, fds, 100);
+    for (int i = 0; i < count; i++) {
+        if (fds[i] != fd) {  // Ne pas envoyer au joueur qui vient de rejoindre
+            send(fds[i], joined_message, strlen(joined_message), 0);
+        }
+    }
+    
+    // Si maintenant il y a 2 joueurs, envoyer un message spécial au créateur
+    if (new_nb_players >= 2) {
+        // Récupérer le créateur de la session
+        const char *sql_creator = "SELECT created_by FROM sessions WHERE id = ?";
+        sqlite3_stmt *stmt_creator;
+        int creator_id = -1;
+        if (sqlite3_prepare_v2(db, sql_creator, -1, &stmt_creator, NULL) == SQLITE_OK) {
+            sqlite3_bind_int(stmt_creator, 1, session_id);
+            if (sqlite3_step(stmt_creator) == SQLITE_ROW) {
+                creator_id = sqlite3_column_int(stmt_creator, 0);
+            }
+        }
+        sqlite3_finalize(stmt_creator);
+        
+        // Envoyer un message au créateur pour indiquer que la session est prête
+        if (creator_id > 0) {
+            int creator_fd = get_fd_by_player_id(creator_id);
+            if (creator_fd > 0) {
+                char ready_message[256];
+                snprintf(ready_message, sizeof(ready_message),
+                    "POST session/ready\n{\"action\":\"session/ready\",\"message\":\"Session prête à démarrer\",\"nbPlayers\":%d}\n",
+                    new_nb_players);
+                send(creator_fd, ready_message, strlen(ready_message), 0);
+            }
+        }
+    }
 }
 
 int count_players_in_session(void* db, int session_id) {
     int count = 0;
     // Exemple pour SQLite
     sqlite3_stmt *stmt;
-    const char *sql = "SELECT COUNT(*) FROM session_players WHERE session_id = ?;";
+    const char *sql = "SELECT COUNT(*) FROM players_session WHERE session_id = ?;";
 
     if (sqlite3_prepare_v2((sqlite3*)db, sql, -1, &stmt, NULL) == SQLITE_OK) {
         sqlite3_bind_int(stmt, 1, session_id);
@@ -662,4 +788,167 @@ int count_players_in_session(void* db, int session_id) {
     }
     sqlite3_finalize(stmt);
     return count;
+}
+
+// Vérifie si un joueur est le créateur d'une session
+bool is_session_creator(sqlite3 *db, int session_id, int player_id) {
+    sqlite3_stmt *stmt;
+    const char *sql = "SELECT created_by FROM sessions WHERE id = ?";
+    bool is_creator = false;
+    
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+        sqlite3_bind_int(stmt, 1, session_id);
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            int creator_id = sqlite3_column_int(stmt, 0);
+            is_creator = (creator_id == player_id);
+        }
+    }
+    sqlite3_finalize(stmt);
+    return is_creator;
+}
+
+// Met à jour le statut d'une session
+int update_session_status(sqlite3 *db, int session_id, const char *status) {
+    const char *sql = "UPDATE sessions SET status = ? WHERE id = ?";
+    sqlite3_stmt *stmt;
+    
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+        return -1;
+    }
+    
+    sqlite3_bind_text(stmt, 1, status, -1, SQLITE_STATIC);
+    sqlite3_bind_int(stmt, 2, session_id);
+    
+    int rc = sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+    
+    return (rc == SQLITE_DONE) ? 0 : -1;
+}
+
+// Sélectionne aléatoirement les questions pour une session selon les thèmes et la difficulté
+// Retourne le nombre de questions sélectionnées, ou -1 en cas d'erreur
+int select_questions_for_session(sqlite3 *db, int session_id, int nb_questions) {
+    // Récupérer les thèmes et la difficulté de la session
+    const char *sql_info = "SELECT difficulty FROM sessions WHERE id = ?";
+    sqlite3_stmt *stmt_info;
+    char difficulty[32] = {0};
+    
+    if (sqlite3_prepare_v2(db, sql_info, -1, &stmt_info, NULL) != SQLITE_OK) {
+        return -1;
+    }
+    
+    sqlite3_bind_int(stmt_info, 1, session_id);
+    if (sqlite3_step(stmt_info) != SQLITE_ROW) {
+        sqlite3_finalize(stmt_info);
+        return -1;
+    }
+    
+    const unsigned char *diff = sqlite3_column_text(stmt_info, 0);
+    if (diff) {
+        strncpy(difficulty, (const char *)diff, sizeof(difficulty) - 1);
+    }
+    sqlite3_finalize(stmt_info);
+    
+    // Récupérer les thèmes de la session
+    const char *sql_themes = "SELECT theme_id FROM themes_session WHERE session_id = ?";
+    sqlite3_stmt *stmt_themes;
+    int theme_ids[20];
+    int theme_count = 0;
+    
+    if (sqlite3_prepare_v2(db, sql_themes, -1, &stmt_themes, NULL) != SQLITE_OK) {
+        return -1;
+    }
+    
+    sqlite3_bind_int(stmt_themes, 1, session_id);
+    while (sqlite3_step(stmt_themes) == SQLITE_ROW && theme_count < 20) {
+        theme_ids[theme_count++] = sqlite3_column_int(stmt_themes, 0);
+    }
+    sqlite3_finalize(stmt_themes);
+    
+    if (theme_count == 0) {
+        return -1;
+    }
+    
+    // Construire la clause IN pour les thèmes
+    char theme_list[256] = {0};
+    for (int i = 0; i < theme_count; i++) {
+        char buf[16];
+        snprintf(buf, sizeof(buf), "%d", theme_ids[i]);
+        if (i > 0) strcat(theme_list, ",");
+        strcat(theme_list, buf);
+    }
+    
+    // D'abord, compter combien de questions sont disponibles
+    char sql_count[512];
+    snprintf(sql_count, sizeof(sql_count),
+        "SELECT COUNT(*) FROM questions WHERE theme_id IN (%s) AND difficulty = ?",
+        theme_list);
+    
+    sqlite3_stmt *stmt_count;
+    int available_questions = 0;
+    if (sqlite3_prepare_v2(db, sql_count, -1, &stmt_count, NULL) == SQLITE_OK) {
+        sqlite3_bind_text(stmt_count, 1, difficulty, -1, SQLITE_STATIC);
+        if (sqlite3_step(stmt_count) == SQLITE_ROW) {
+            available_questions = sqlite3_column_int(stmt_count, 0);
+        }
+    }
+    sqlite3_finalize(stmt_count);
+    
+    printf("DEBUG select_questions_for_session: difficulty='%s', theme_count=%d, available_questions=%d, nb_questions_demandedes=%d\n", 
+           difficulty, theme_count, available_questions, nb_questions);
+    
+    if (available_questions == 0) {
+        printf("DEBUG select_questions_for_session: Aucune question disponible pour ces critères\n");
+        return -1;
+    }
+    
+    // Sélectionner les questions correspondant aux critères
+    char sql_select[512];
+    snprintf(sql_select, sizeof(sql_select),
+        "SELECT id FROM questions WHERE theme_id IN (%s) AND difficulty = ? ORDER BY RANDOM() LIMIT ?",
+        theme_list);
+    
+    sqlite3_stmt *stmt_select;
+    if (sqlite3_prepare_v2(db, sql_select, -1, &stmt_select, NULL) != SQLITE_OK) {
+        printf("DEBUG select_questions_for_session: Erreur prepare SQL\n");
+        return -1;
+    }
+    
+    sqlite3_bind_text(stmt_select, 1, difficulty, -1, SQLITE_STATIC);
+    sqlite3_bind_int(stmt_select, 2, nb_questions);
+    
+    // Insérer les questions sélectionnées dans session_questions
+    const char *sql_insert = "INSERT INTO session_questions (session_id, question_id, num_question) VALUES (?, ?, ?)";
+    sqlite3_stmt *stmt_insert;
+    if (sqlite3_prepare_v2(db, sql_insert, -1, &stmt_insert, NULL) != SQLITE_OK) {
+        sqlite3_finalize(stmt_select);
+        return -1;
+    }
+    
+    int question_num = 1;
+    int questions_selected = 0;
+    
+    while (sqlite3_step(stmt_select) == SQLITE_ROW && question_num <= nb_questions) {
+        int question_id = sqlite3_column_int(stmt_select, 0);
+        
+        sqlite3_bind_int(stmt_insert, 1, session_id);
+        sqlite3_bind_int(stmt_insert, 2, question_id);
+        sqlite3_bind_int(stmt_insert, 3, question_num);
+        
+        if (sqlite3_step(stmt_insert) == SQLITE_DONE) {
+            questions_selected++;
+        } else {
+            printf("DEBUG select_questions_for_session: Erreur insertion question %d (id=%d)\n", question_num, question_id);
+        }
+        
+        sqlite3_reset(stmt_insert);
+        question_num++;
+    }
+    
+    sqlite3_finalize(stmt_select);
+    sqlite3_finalize(stmt_insert);
+    
+    printf("DEBUG select_questions_for_session: questions_selected=%d sur %d demandées\n", questions_selected, nb_questions);
+    
+    return questions_selected;
 }

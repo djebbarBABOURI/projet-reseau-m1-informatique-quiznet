@@ -10,5 +10,6 @@ bool extract_json_string(const char *json, const char *key, char *out, size_t ou
 void handle_client_request(const char *request, int client_fd, sqlite3 *db);
 void handle_themes_list(int fd, sqlite3 *db);
 void handle_sessions_list(int fd, sqlite3 *db);
+void handle_session_start(int client_fd, sqlite3 *db);
 
 #endif
