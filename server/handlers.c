@@ -635,9 +635,13 @@ void handle_session_start(int client_fd, sqlite3 *db) {
     
     // Récupérer la session du joueur qui est en attente (il doit être dans une session en attente)
     const char *sql = 
-        "SELECT ps.session_id FROM players_session ps "
-        "JOIN sessions s ON ps.session_id = s.id "
-        "WHERE ps.player_id = ? AND s.status = 'waiting' LIMIT 1";
+    "SELECT ps.session_id "
+    "FROM players_session ps "
+    "JOIN sessions s ON ps.session_id = s.id "
+    "WHERE ps.player_id = ? "
+    "ORDER BY s.id DESC "     // Trier par ID décroissant => dernière session en premier
+    "LIMIT 1";                // Ne garder que la dernière session
+
     sqlite3_stmt *stmt;
     int session_id = -1;
     
@@ -689,11 +693,11 @@ void handle_session_start(int client_fd, sqlite3 *db) {
         }
     }
     sqlite3_finalize(stmt_creator);
-    
-    printf("DEBUG handle_session_start: real_creator_id (from sessions)=%d, player_id=%d, is_creator (from players_session)=%d\n", real_creator_id, player_id, is_creator);
+    print_authenticated_clients();
+    printf("DEBUG handle_session_start: real_creator_id (from sessions)=%d, player_id=%d, is_creator (from players_session)=%d, session_id= %d\n", real_creator_id, player_id, is_creator, session_id);
     
     if (!is_creator) {
-        printf("DEBUG handle_session_start: erreur - pas le créateur (créateur réel: %d, joueur actuel: %d)\n", real_creator_id, player_id);
+        printf("DEBUG handle_session_start: erreur - pas le créateur (créateur réel: %d, joueur actuel: %d, session_id: %d)\n", real_creator_id, player_id, session_id);
         send_error_response(client_fd, "session/start", "403", "Only the creator can start the session");
         return;
     }

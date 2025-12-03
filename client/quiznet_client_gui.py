@@ -1028,6 +1028,13 @@ class QuizNetGUI:
                             self.root.after(0, lambda: dialog.destroy())
                             self.root.after(0, lambda: status_label.config(text="✅ Session créée avec succès !", 
                                                                           foreground=self.colors['success']if status_label.winfo_exists() else None))
+                            # self.root.after(0, lambda: (
+                            #     status_label.config(
+                            #         text="✅ Session créée avec succès !",
+                            #         foreground=self.colors['success']
+                            #     ) if status_label.winfo_exists() else None
+                            # ))
+
                             self.root.after(0, self.show_waiting_room)
                             # Rafraîchir la liste des sessions après un court délai pour permettre au serveur de finaliser
                             self.root.after(100, self.refresh_sessions)
