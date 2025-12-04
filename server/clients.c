@@ -10,6 +10,13 @@ static int clients_count = 0;
 void add_authenticated_client(int fd, int player_id) {
     // Supprimer si déjà existant
     remove_client(fd);
+    // Supprimer tout FD existant pour ce player_id
+    for (int i = 0; i < clients_count; i++) {
+        if (clients[i].player_id == player_id) {
+            remove_client(clients[i].fd);
+            break;
+        }
+    }
 
     if (clients_count < MAX_CLIENTS) {
         clients[clients_count].fd = fd;

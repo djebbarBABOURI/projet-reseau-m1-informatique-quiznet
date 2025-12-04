@@ -74,7 +74,7 @@ int main(int argc, char **argv)
   }
 
   create_tables(db);
-  populate_db(db);
+  // populate_db(db);
 
   while (1)
   {

@@ -348,12 +348,17 @@ class QuizNetGUI:
         self.question_label = ttk.Label(self.question_frame, text="En attente d'une question...", 
                                        font=("Arial", 13, "bold"), wraplength=700,
                                        foreground=self.colors['dark'])
-        self.question_label.grid(row=0, column=0, columnspan=2, pady=8)
+        self.question_label.grid(row=1, column=0, columnspan=2, pady=8)
+        # Intercepter et afficher directement la première question
+        first_question = self.client.current_question
+        if first_question:
+            print(f"Première question interceptée : {first_question}")
+            self.display_question(first_question)
         
         self.question_info = ttk.Label(self.question_frame, text="", 
                                       font=("Arial", 11),
                                       foreground=self.colors['dark'])
-        self.question_info.grid(row=1, column=0, columnspan=2, pady=5)
+        self.question_info.grid(row=0, column=0, columnspan=2, pady=5)
         
         self.timer_label = ttk.Label(self.question_frame, text="", 
                                     font=("Arial", 16, "bold"), 
@@ -1026,15 +1031,12 @@ class QuizNetGUI:
                         if session_id:
                             # Succès - fermer la dialog et afficher la salle d'attente
                             self.root.after(0, lambda: dialog.destroy())
-                            self.root.after(0, lambda: status_label.config(text="✅ Session créée avec succès !", 
-                                                                          foreground=self.colors['success']if status_label.winfo_exists() else None))
-                            # self.root.after(0, lambda: (
-                            #     status_label.config(
-                            #         text="✅ Session créée avec succès !",
-                            #         foreground=self.colors['success']
-                            #     ) if status_label.winfo_exists() else None
-                            # ))
-
+                            # self.root.after(0, lambda: status_label.config(text="✅ Session créée avec succès !", 
+                            #                                               foreground=self.colors['success']if status_label.winfo_exists() else None))
+                            self.root.after(0, lambda: status_label.config(
+                                text="✅ Session créée avec succès !",
+                                foreground=self.colors['success']
+                            ) if status_label.winfo_exists() else None)
                             self.root.after(0, self.show_waiting_room)
                             # Rafraîchir la liste des sessions après un court délai pour permettre au serveur de finaliser
                             self.root.after(100, self.refresh_sessions)
@@ -1286,6 +1288,9 @@ class QuizNetGUI:
         self.results_text.delete(1.0, tk.END)
         self.results_text.insert(tk.END, "🎯 La session a commencé !\n\n")
         print("DEBUG start_game: Page de jeu configurée")
+
+        if self.client.current_question:
+            self.display_question(self.client.current_question)
     
     def display_question(self, question_data: Dict):
         """Affiche une question"""
@@ -1299,11 +1304,13 @@ class QuizNetGUI:
         question = question_data.get('question', '')
         difficulty = question_data.get('difficulty', '')
         q_type = question_data.get("type", "")
-        
-        self.question_label.config(text=question)
+        diff_colors = {"facile": "green", "moyen": "orange", "difficile": "red"}
         self.question_info.config(
-            text=f"Question {question_num}/{total_questions} - Difficulté: {difficulty}")
-        
+            text=f"Question {question_num}/{total_questions} - Difficulté: {difficulty}",
+            foreground=diff_colors.get(difficulty, "black")
+        )
+
+        self.question_label.config(text=question)
         # Nettoyer les réponses précédentes (sauf text_answer_entry)
         for widget in self.answers_frame.winfo_children():
             if widget != self.text_answer_entry:

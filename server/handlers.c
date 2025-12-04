@@ -501,6 +501,123 @@ static void broadcast_to_session(sqlite3 *db, int session_id, const char *messag
     }
 }
 
+// Envoie la question suivante (>1) d'une session
+static void send_next_question(sqlite3 *db, int session_id) {
+    // Récupérer le numéro de la question courante et nb_questions
+    const char *sql_session = "SELECT current_question, nb_questions, time_limit FROM sessions WHERE id = ?";
+    sqlite3_stmt *stmt_session;
+    int current_question = 1;
+    int nb_questions = 0;
+    int time_limit = 30;
+
+    if (sqlite3_prepare_v2(db, sql_session, -1, &stmt_session, NULL) == SQLITE_OK) {
+        sqlite3_bind_int(stmt_session, 1, session_id);
+        if (sqlite3_step(stmt_session) == SQLITE_ROW) {
+            current_question = sqlite3_column_int(stmt_session, 0);
+            nb_questions = sqlite3_column_int(stmt_session, 1);
+            time_limit = sqlite3_column_int(stmt_session, 2);
+        }
+    }
+    sqlite3_finalize(stmt_session);
+
+    if (current_question > nb_questions) {
+        printf("DEBUG send_next_question: toutes les questions ont déjà été envoyées\n");
+        return;
+    }
+
+    // Récupérer la question courante
+    const char *sql_question =
+        "SELECT q.id, q.type, q.enonce, q.answers, q.difficulty "
+        "FROM session_questions sq "
+        "JOIN questions q ON sq.question_id = q.id "
+        "WHERE sq.session_id = ? AND sq.num_question = ?";
+    sqlite3_stmt *stmt_question;
+
+    if (sqlite3_prepare_v2(db, sql_question, -1, &stmt_question, NULL) != SQLITE_OK) return;
+    sqlite3_bind_int(stmt_question, 1, session_id);
+    sqlite3_bind_int(stmt_question, 2, current_question);
+
+    if (sqlite3_step(stmt_question) == SQLITE_ROW) {
+        const unsigned char *type = sqlite3_column_text(stmt_question, 1);
+        const unsigned char *enonce = sqlite3_column_text(stmt_question, 2);
+        const unsigned char *answers_json = sqlite3_column_text(stmt_question, 3);
+        const unsigned char *difficulty = sqlite3_column_text(stmt_question, 4);
+
+        // Construire le JSON
+        size_t capacity = 2048, length = 0;
+        char *json = malloc(capacity);
+        if (!json) { sqlite3_finalize(stmt_question); return; }
+        json[0] = '\0';
+
+        bool ok = append_str(&json, &length, &capacity, "POST question/new\n{");
+        ok = ok && append_str(&json, &length, &capacity, "\"action\":\"question/new\",");
+        char buf[64];
+        snprintf(buf, sizeof(buf), "\"questionNum\":%d,\"totalQuestions\":%d", current_question, nb_questions);
+        ok = ok && append_str(&json, &length, &capacity, buf);
+        ok = ok && append_str(&json, &length, &capacity, ",\"type\":\"");
+        ok = ok && append_json_string(&json, &length, &capacity, type);
+        ok = ok && append_str(&json, &length, &capacity, "\",\"difficulty\":\"");
+        ok = ok && append_json_string(&json, &length, &capacity, difficulty);
+        ok = ok && append_str(&json, &length, &capacity, "\",\"question\":\"");
+        ok = ok && append_json_string(&json, &length, &capacity, enonce);
+        ok = ok && append_str(&json, &length, &capacity, "\"");
+        ok = ok && append_str(&json, &length, &capacity, ",\"timeLimit\":");
+        snprintf(buf, sizeof(buf), "%d", time_limit);
+        ok = ok && append_str(&json, &length, &capacity, buf);
+
+        if (type && strcmp((const char *)type, "qcm") == 0 && answers_json) {
+            ok = ok && append_str(&json, &length, &capacity, ",\"answers\":");
+            ok = ok && append_str(&json, &length, &capacity, (const char *)answers_json);
+        }
+
+        ok = ok && append_str(&json, &length, &capacity, "}\n");
+
+        if (ok) broadcast_to_session(db, session_id, json);
+        free(json);
+
+        // Incrémenter current_question
+        const char *sql_update = "UPDATE sessions SET current_question = ? WHERE id = ?";
+        sqlite3_stmt *stmt_update;
+        if (sqlite3_prepare_v2(db, sql_update, -1, &stmt_update, NULL) == SQLITE_OK) {
+            sqlite3_bind_int(stmt_update, 1, current_question + 1);
+            sqlite3_bind_int(stmt_update, 2, session_id);
+            sqlite3_step(stmt_update);
+        }
+        sqlite3_finalize(stmt_update);
+    }
+
+    sqlite3_finalize(stmt_question);
+}
+
+
+static void *question_loop_thread(void *arg) {
+    SessionStartArgs *args = (SessionStartArgs *)arg;
+    sqlite3 *db = args->db;
+    int session_id = args->session_id;
+
+    int nb_questions = args->nb_questions;
+    int time_limit = 30; // par défaut
+
+    // Récupérer le time_limit réel
+    const char *sql = "SELECT time_limit FROM sessions WHERE id = ?";
+    sqlite3_stmt *stmt;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+        sqlite3_bind_int(stmt, 1, session_id);
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            time_limit = sqlite3_column_int(stmt, 0);
+        }
+    }
+    sqlite3_finalize(stmt);
+
+    // Boucle d'envoi des questions
+    for (int i = 1; i <= nb_questions; i++) {
+        sleep(time_limit); // attend le temps de réponse
+        send_next_question(db, session_id);
+    }
+
+    return NULL;
+}
+
 // Envoie la première question à tous les joueurs d'une session
 static void send_first_question(sqlite3 *db, int session_id, int nb_questions) {
     // Récupérer le time_limit de la session
@@ -524,6 +641,7 @@ static void send_first_question(sqlite3 *db, int session_id, int nb_questions) {
     
     sqlite3_stmt *stmt;
     if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+        printf("DEBUG send_first_question: erreur SQL prepare\n");
         return;
     }
     
@@ -536,18 +654,29 @@ static void send_first_question(sqlite3 *db, int session_id, int nb_questions) {
         const unsigned char *answers_json = sqlite3_column_text(stmt, 3);
         const unsigned char *difficulty = sqlite3_column_text(stmt, 4);
         int num_question = sqlite3_column_int(stmt, 5);
-        
-        // Construire le message JSON selon le type de question
+
+        // Sécuriser les valeurs NULL
+        if (!type) type = (const unsigned char *)"";
+        if (!enonce) enonce = (const unsigned char *)"";
+        if (!difficulty) difficulty = (const unsigned char *)"";
+        if (!answers_json) answers_json = (const unsigned char *)"[]";
+
+        printf("DEBUG send_first_question: question_id=%d, type=%s, enonce=%s, difficulty=%s, answers=%s\n",
+            question_id, type, enonce, difficulty, answers_json);
+
+        // Construire le message JSON
         size_t capacity = 2048;
         size_t length = 0;
         char *json = malloc(capacity);
         if (!json) {
             sqlite3_finalize(stmt);
+            printf("DEBUG send_first_question: erreur malloc\n");
             return;
         }
         json[0] = '\0';
-        
-        bool ok = append_str(&json, &length, &capacity, "POST question/new\n{");
+
+        bool ok = true;
+        ok = ok && append_str(&json, &length, &capacity, "POST question/new\n{");
         ok = ok && append_str(&json, &length, &capacity, "\"action\":\"question/new\",\"questionNum\":");
         char num_buf[32], total_buf[32];
         snprintf(num_buf, sizeof(num_buf), "%d", num_question);
@@ -559,34 +688,34 @@ static void send_first_question(sqlite3 *db, int session_id, int nb_questions) {
         ok = ok && append_json_string(&json, &length, &capacity, type);
         ok = ok && append_str(&json, &length, &capacity, "\",\"difficulty\":\"");
         ok = ok && append_json_string(&json, &length, &capacity, difficulty);
-        ok = ok && append_str(&json, &length, &capacity, ",\"question\":\"");
+        ok = ok && append_str(&json, &length, &capacity, "\",\"question\":\"");
         ok = ok && append_json_string(&json, &length, &capacity, enonce);
         ok = ok && append_str(&json, &length, &capacity, "\"");
-        
-        // Ajouter le timeLimit (selon le protocole, il est déterminé par les paramètres de la session)
+
         char time_limit_buf[32];
         snprintf(time_limit_buf, sizeof(time_limit_buf), "%d", time_limit);
         ok = ok && append_str(&json, &length, &capacity, ",\"timeLimit\":");
         ok = ok && append_str(&json, &length, &capacity, time_limit_buf);
-        
-        // Pour les QCM, ajouter le tableau answers
-        if (type && strcmp((const char *)type, "qcm") == 0 && answers_json) {
+
+        if (type && strcmp((const char *)type, "qcm") == 0) {
             ok = ok && append_str(&json, &length, &capacity, ",\"answers\":");
             ok = ok && append_str(&json, &length, &capacity, (const char *)answers_json);
         }
-        
+
         ok = ok && append_str(&json, &length, &capacity, "}\n");
-        
+
         if (ok) {
-            printf("DEBUG send_first_question: message complet (%zu bytes):\n%s\n", length, json);
+            printf("DEBUG send_first_question: message complet (%zu bytes)\n%s\n", length, json);
             broadcast_to_session(db, session_id, json);
         } else {
             printf("DEBUG send_first_question: erreur construction JSON\n");
         }
-        
+
         free(json);
+    } else {
+        printf("DEBUG send_first_question: aucune question trouvée pour session_id=%d\n", session_id);
     }
-    
+
     sqlite3_finalize(stmt);
 }
 
@@ -596,25 +725,34 @@ static void *session_start_thread(void *arg) {
     sqlite3 *db = args->db;
     int session_id = args->session_id;
     int nb_questions = args->nb_questions;
-    
+
     printf("DEBUG session_start_thread: début, session_id=%d, nb_questions=%d\n", session_id, nb_questions);
-    
+
     // Envoyer le message de démarrage avec countdown à tous les joueurs
     char start_message[256];
     snprintf(start_message, sizeof(start_message),
         "POST session/started\n{\"action\":\"session/started\",\"message\":\"session is starting\",\"countdown\":3}\n");
+
     printf("DEBUG session_start_thread: diffusion du message de démarrage\n");
-    printf("DEBUG session_start_thread: message complet: %s", start_message);
     broadcast_to_session(db, session_id, start_message);
-    
+
     // Attendre 3 secondes (countdown)
     printf("DEBUG session_start_thread: attente de 3 secondes (countdown)...\n");
     sleep(3);
-    
+
     // Envoyer la première question
     printf("DEBUG session_start_thread: envoi de la première question\n");
     send_first_question(db, session_id, nb_questions);
-    
+   
+    // Lancer le thread pour les questions suivantes
+    SessionStartArgs *args2 = malloc(sizeof(SessionStartArgs));
+    args2->db = db;
+    args2->session_id = session_id;
+    args2->nb_questions = nb_questions;
+
+    pthread_t thread_next;
+    pthread_create(&thread_next, NULL, question_loop_thread, args2);
+    pthread_detach(thread_next);
     printf("DEBUG session_start_thread: fin du thread\n");
     free(args);
     return NULL;
@@ -746,7 +884,6 @@ void handle_session_start(int client_fd, sqlite3 *db) {
     printf("DEBUG handle_session_start: questions_selected=%d sur %d demandées\n", questions_selected, nb_questions);
     
     // Si moins de questions que demandé, on accepte quand même si au moins 1 question
-    // (on pourrait aussi répéter des questions, mais pour l'instant on accepte ce qu'on a)
     if (questions_selected < 1) {
         printf("DEBUG handle_session_start: erreur - aucune question sélectionnée\n");
         send_error_response(client_fd, "session/start", "400", "Not enough questions matching criteria");

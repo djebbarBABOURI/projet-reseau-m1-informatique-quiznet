@@ -47,7 +47,8 @@ void create_tables(sqlite3 *db) {
         "    mode TEXT CHECK(mode IN ('solo','battle')),"
         "    max_players INTEGER,"
         "    status TEXT CHECK(status IN ('waiting','playing','finished')),"
-        "    created_by INTEGER REFERENCES players(id)"
+        "    created_by INTEGER REFERENCES players(id),"
+        "    current_question INTEGER DEFAULT 1"
         ");",
 
         "CREATE TABLE IF NOT EXISTS themes_session ("
@@ -166,7 +167,7 @@ void populate_db(sqlite3 *db) {
         printf("DEBUG populate_db: Thème %d: %s (id=%d)\n", t, themes_names[t], theme_id);
 
         int questions_inserted = 0;
-        for (int q = 0; q < 10; q++) {
+        for (int q = 0; q < 90; q++) {
             Question *qn = &all_questions[t][q];
 
             if (insert_question(db,
@@ -226,26 +227,55 @@ int insert_theme(sqlite3 *db, const char *name) {
 int insert_question(sqlite3 *db, int theme_id, const char *difficulty,
                     const char *type, const char *enonce,
                     const char *answers_json, const char *correct_answer_json) {
-    char sql[4096];
-    snprintf(sql, sizeof(sql),
-             "INSERT INTO questions(theme_id, difficulty, type, enonce, answers, correct_answer) "
-             "VALUES(%d, '%s', '%s', '%s', '%s', '%s');",
-             theme_id,
-             difficulty,
-             type,
-             enonce,
-             answers_json,
-             correct_answer_json);
 
-    char *err_msg = NULL;
-    int rc = sqlite3_exec(db, sql, 0, 0, &err_msg);
-    if (rc != SQLITE_OK) {
-        fprintf(stderr, "SQL error (insert_question): %s\n", err_msg);
-        sqlite3_free(err_msg);
-        return rc;
+    const char *sql =
+        "INSERT INTO questions(theme_id, difficulty, type, enonce, answers, correct_answer) "
+        "VALUES(?, ?, ?, ?, ?, ?);";
+
+    sqlite3_stmt *stmt;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+        fprintf(stderr, "SQL prepare error: %s\n", sqlite3_errmsg(db));
+        return SQLITE_ERROR;
     }
-    return SQLITE_OK;
+
+    sqlite3_bind_int(stmt, 1, theme_id);
+    sqlite3_bind_text(stmt, 2, difficulty, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 3, type, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 4, enonce, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 5, answers_json, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 6, correct_answer_json, -1, SQLITE_TRANSIENT);
+
+    int rc = sqlite3_step(stmt);
+    if (rc != SQLITE_DONE) {
+        fprintf(stderr, "SQL step error: %s\n", sqlite3_errmsg(db));
+    }
+
+    sqlite3_finalize(stmt);
+    return rc == SQLITE_DONE ? SQLITE_OK : SQLITE_ERROR;
 }
+// int insert_question(sqlite3 *db, int theme_id, const char *difficulty,
+//                     const char *type, const char *enonce,
+//                     const char *answers_json, const char *correct_answer_json) {
+//     char sql[4096];
+//     snprintf(sql, sizeof(sql),
+//              "INSERT INTO questions(theme_id, difficulty, type, enonce, answers, correct_answer) "
+//              "VALUES(%d, '%s', '%s', '%s', '%s', '%s');",
+//              theme_id,
+//              difficulty,
+//              type,
+//              enonce,
+//              answers_json,
+//              correct_answer_json);
+
+//     char *err_msg = NULL;
+//     int rc = sqlite3_exec(db, sql, 0, 0, &err_msg);
+//     if (rc != SQLITE_OK) {
+//         fprintf(stderr, "SQL error (insert_question): %s\n", err_msg);
+//         sqlite3_free(err_msg);
+//         return rc;
+//     }
+//     return SQLITE_OK;
+// }
 
 //
 int ensure_players_table(sqlite3 *db)
