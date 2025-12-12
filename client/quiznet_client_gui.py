@@ -392,6 +392,9 @@ class QuizNetGUI:
                                       state=tk.DISABLED, style='Danger.TButton')
         self.skip_button.pack(side=tk.LEFT, padx=10)
         
+        # Fonction pour mettre à jour le texte des boutons de jokers
+        self.update_jokers_display()
+        
         # Bouton de réponse avec style
         self.submit_button = ttk.Button(self.game_frame, text="✅ Envoyer la réponse", 
                                        command=self.submit_answer, state=tk.DISABLED,
@@ -1169,6 +1172,11 @@ class QuizNetGUI:
         self.waiting_text.delete(1.0, tk.END)
         self.waiting_text.insert(tk.END, "🚪 SALLE D'ATTENTE\n\n")
         
+        # Afficher les jokers disponibles
+        fifty_count = self.client.jokers.get("fifty", 0)
+        skip_count = self.client.jokers.get("skip", 0)
+        self.waiting_text.insert(tk.END, f" Jokers disponibles: 50/50 ({fifty_count}), Passer ({skip_count})\n\n")
+        
         if self.client.is_creator:
             self.waiting_text.insert(tk.END, "👑 Vous êtes le créateur de la session\n")
             self.waiting_text.insert(tk.END, "Appuyez sur 'Démarrer' quand au moins 2 joueurs sont présents\n\n")
@@ -1176,6 +1184,9 @@ class QuizNetGUI:
         else:
             self.waiting_text.insert(tk.END, "⏳ En attente que le créateur démarre la session...\n\n")
             self.start_button.config(state=tk.DISABLED)
+        
+        # Mettre à jour l'affichage des jokers
+        self.update_jokers_display()
     
     def start_session(self):
         """Démarre la session"""
@@ -1246,18 +1257,27 @@ class QuizNetGUI:
             self.root.after(0, lambda: self.results_text.see(tk.END))
         
         elif action == "joker/use":
+            # Mettre à jour les jokers restants
             self.client.jokers = data.get("jokers", self.client.jokers)
+            
+            # Mettre à jour l'affichage des jokers
+            self.root.after(0, self.update_jokers_display)
+            
             if "remainingAnswers" in data:
+                # Joker 50/50 utilisé - mettre à jour les réponses restantes
                 if self.client.current_question:
                     self.client.current_question["remainingAnswers"] = data["remainingAnswers"]
-                self.root.after(0, lambda: self.display_question(self.client.current_question))
-                # Mettre à jour le bouton 50/50
-                self.root.after(0, lambda: self.fifty_button.config(state=tk.DISABLED))
+                    # Réafficher la question avec seulement les réponses restantes
+                    self.root.after(0, lambda: self.display_question(self.client.current_question))
             else:
+                # Joker Passer utilisé - question sautée
                 self.root.after(0, lambda: messagebox.showinfo("Joker", "Question passée !"))
                 self.answered = True
                 self.client.current_question = None
                 self.root.after(0, lambda: self.submit_button.config(state=tk.DISABLED))
+                # Désactiver les jokers après utilisation
+                self.root.after(0, lambda: self.fifty_button.config(state=tk.DISABLED))
+                self.root.after(0, lambda: self.skip_button.config(state=tk.DISABLED))
     
     def start_game(self):
         """Démarre le jeu"""
@@ -1326,8 +1346,24 @@ class QuizNetGUI:
             answers = question_data.get("answers", [])
             remaining = question_data.get("remainingAnswers", None)
             
-            for i, ans in enumerate(answers):
-                if not remaining or str(i) in remaining or ans in remaining:
+            # Si le joker 50/50 a été utilisé, afficher uniquement les réponses restantes
+            if remaining:
+                # remainingAnswers peut être une liste d'indices (strings) ou de réponses (strings)
+                remaining_indices = []
+                for i, ans in enumerate(answers):
+                    # Vérifier si l'indice (string) ou la réponse est dans remaining
+                    if str(i) in remaining or ans in remaining:
+                        remaining_indices.append(i)
+                
+                # Afficher uniquement les réponses restantes avec leur indice original
+                for idx, i in enumerate(remaining_indices):
+                    rb = ttk.Radiobutton(self.answers_frame, text=answers[i], variable=self.answer_var, 
+                                        value=str(i))  # Garder l'indice original pour l'envoi
+                    rb.grid(row=idx, column=0, sticky=tk.W, pady=2)
+                    self.answer_buttons.append(rb)
+            else:
+                # Afficher toutes les réponses
+                for i, ans in enumerate(answers):
                     rb = ttk.Radiobutton(self.answers_frame, text=ans, variable=self.answer_var, 
                                         value=str(i))
                     rb.grid(row=i, column=0, sticky=tk.W, pady=2)
@@ -1348,15 +1384,23 @@ class QuizNetGUI:
         # Activer les boutons
         self.submit_button.config(state=tk.NORMAL)
         
-        # Gérer les jokers
-        if q_type == "qcm" and self.client.jokers.get("fifty", 0) > 0:
-            self.fifty_button.config(state=tk.NORMAL)
-        else:
-            self.fifty_button.config(state=tk.DISABLED)
+        # Mettre à jour l'affichage des jokers
+        self.update_jokers_display()
         
-        if self.client.jokers.get("skip", 0) > 0:
-            self.skip_button.config(state=tk.NORMAL)
+        # Gérer les jokers - activer uniquement si disponibles et avant de répondre
+        if not self.answered:
+            if q_type == "qcm" and self.client.jokers.get("fifty", 0) > 0:
+                self.fifty_button.config(state=tk.NORMAL)
+            else:
+                self.fifty_button.config(state=tk.DISABLED)
+            
+            if self.client.jokers.get("skip", 0) > 0:
+                self.skip_button.config(state=tk.NORMAL)
+            else:
+                self.skip_button.config(state=tk.DISABLED)
         else:
+            # Désactiver les jokers si on a déjà répondu
+            self.fifty_button.config(state=tk.DISABLED)
             self.skip_button.config(state=tk.DISABLED)
         
         # Démarrer le timer
@@ -1388,18 +1432,43 @@ class QuizNetGUI:
             )
             self.timer_running = False
     
+    def update_jokers_display(self):
+        """Met à jour l'affichage des boutons de jokers avec le nombre restant"""
+        fifty_count = self.client.jokers.get("fifty", 0)
+        skip_count = self.client.jokers.get("skip", 0)
+        
+        self.fifty_button.config(text=f"🎯 50/50 ({fifty_count})")
+        self.skip_button.config(text=f"⏭️ Passer ({skip_count})")
+    
     def use_joker(self, joker_type: str):
         """Utilise un joker"""
-        def do_use():
-            self.client.use_joker(joker_type)
+        # Vérifier que le joker est disponible
+        if joker_type == "fifty" and self.client.jokers.get("fifty", 0) <= 0:
+            messagebox.showwarning("Joker indisponible", "Vous n'avez plus de joker 50/50 disponible")
+            return
         
-        threading.Thread(target=do_use, daemon=True).start()
+        if joker_type == "skip" and self.client.jokers.get("skip", 0) <= 0:
+            messagebox.showwarning("Joker indisponible", "Vous n'avez plus de joker Passer disponible")
+            return
         
+        # Vérifier qu'on n'a pas déjà répondu
+        if self.answered:
+            messagebox.showwarning("Trop tard", "Vous ne pouvez utiliser un joker qu'avant de répondre")
+            return
+        
+        # Désactiver temporairement les boutons pendant l'envoi
         if joker_type == "fifty":
             self.fifty_button.config(state=tk.DISABLED)
         elif joker_type == "skip":
             self.skip_button.config(state=tk.DISABLED)
-            self.answered = True
+        
+        def do_use():
+            success = self.client.use_joker(joker_type)
+            if not success:
+                # Réactiver le bouton en cas d'échec
+                self.root.after(0, self.update_jokers_display)
+        
+        threading.Thread(target=do_use, daemon=True).start()
     
     def submit_answer(self):
         """Envoie la réponse"""
@@ -1442,6 +1511,9 @@ class QuizNetGUI:
         """Marque la question comme répondue"""
         self.answered = True
         self.submit_button.config(state=tk.DISABLED)
+        # Désactiver les jokers après avoir répondu
+        self.fifty_button.config(state=tk.DISABLED)
+        self.skip_button.config(state=tk.DISABLED)
         self.results_text.insert(tk.END, "✓ Réponse envoyée, en attente des résultats...\n")
     
     def display_results(self, results_data: Dict):
