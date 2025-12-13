@@ -201,3 +201,51 @@ bool ensure_capacity(char **buffer, size_t *capacity, size_t required)
     return true;
 }
 
+bool extract_json_raw(const char *json, const char *key, char *out, size_t outSize)
+{
+    char pattern[128];
+    snprintf(pattern, sizeof(pattern), "\"%s\"", key);
+    const char *pos = strstr(json, pattern);
+    if (!pos) return false;
+
+    pos = strchr(pos, ':');
+    if (!pos) return false;
+    pos++;
+
+    // on copie jusqu'à "," ou "}" ou fin
+    const char *end = pos;
+    while (*end && *end != ',' && *end != '}' && *end != '\n') end++;
+
+    size_t len = end - pos;
+    if (len >= outSize) return false;
+
+    strncpy(out, pos, len);
+    out[len] = '\0';
+
+    // Trim espaces
+    trim(out);
+
+    return true;
+}
+
+
+char *trim(char *str) {
+    char *end;
+    while(isspace((unsigned char)*str)) str++;
+    if(*str == 0) return str;
+    end = str + strlen(str) - 1;
+    while(end > str && isspace((unsigned char)*end)) end--;
+    end[1] = '\0';
+    return str;
+}
+
+bool extract_json_double(const char *json, const char *key, double *out_value) {
+    // très simple pour test, on suppose {"key":value}
+    char pattern[128];
+    snprintf(pattern, sizeof(pattern), "\"%s\":", key);
+    char *pos = strstr(json, pattern);
+    if(!pos) return false;
+    pos += strlen(pattern);
+    *out_value = atof(pos);
+    return true;
+}

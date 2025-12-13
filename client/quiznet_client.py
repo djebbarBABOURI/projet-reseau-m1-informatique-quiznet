@@ -367,19 +367,15 @@ class QuizNetClient:
                     print(f"\n💀 {pseudo} a été éliminé !")
             
             elif action == "joker/use":
-                # Mettre à jour les jokers restants
                 self.jokers = data.get("jokers", self.jokers)
-                print(f"\n🎲 Jokers restants: 50/50 ({self.jokers.get('fifty', 0)}), Passer ({self.jokers.get('skip', 0)})")
-                
                 if "remainingAnswers" in data:
-                    # Joker 50/50 utilisé - mettre à jour les réponses restantes
+                    # Mettre à jour la question avec les réponses restantes
                     if self.current_question:
                         self.current_question["remainingAnswers"] = data["remainingAnswers"]
                     # Réafficher la question avec les réponses restantes
                     if self.current_question:
                         self._display_question(self.current_question)
                 else:
-                    # Joker Passer utilisé - question sautée
                     print(f"\n🎲 Question passée !")
                     self.current_question = None
         except Exception as e:

@@ -267,7 +267,288 @@ void handle_client_request(const char *request, int client_fd, sqlite3 *db)
         return;
     }
 
+    //--------------------------------------------------------------
+    // POST question/answer
+    //--------------------------------------------------------------
+    if (strcasecmp(method, "POST") == 0 && strcmp(path, "question/answer") == 0) {
+        if (!json) {
+            send_error_response(client_fd, "question/answer", "400", "Missing JSON body");
+            return;
+        }
+        handle_question_answer(json, client_fd, db);
+        return;
+    }
+
+    //--------------------------------------------------------------
+    // POST question/results
+    //--------------------------------------------------------------
+    if (strcasecmp(method, "POST") == 0 && strcmp(path, "question/results") == 0) {
+        send_error_response(client_fd, "question/results", "403", "Results are server-only");
+        return;
+    }
+
     send_error_response(client_fd, "unknown", "404", "endpoint not implemented");
+}
+
+void handle_question_answer(const char *json, int client_fd, sqlite3 *db)
+{
+    // Récupération de l'ID du joueur
+    int player_id = get_player_id_by_fd(client_fd);
+    if (player_id <= 0) {
+        printf("[WARN] Unauthenticated player tried to answer (fd=%d)\n", client_fd);
+        send_error_response(client_fd, "question/answer", "401", "Player not authenticated");
+        return;
+    }
+    printf("[INFO] Handling answer for player_id=%d\n", player_id);
+
+    // Réponse : peut être int, bool ou string
+    char answer_str[256] = {0};
+    double response_time = 0.0;
+
+    // Extraction de la réponse brute
+    if (!extract_json_raw(json, "answer", answer_str, sizeof(answer_str))) {
+        printf("[WARN] Missing answer from player_id=%d\n", player_id);
+        send_error_response(client_fd, "question/answer", "400", "Missing answer");
+        return;
+    }
+
+    // Extraction du temps de réponse
+    if (!extract_json_double(json, "responseTime", &response_time)) {
+        printf("[WARN] Invalid or missing responseTime from player_id=%d\n", player_id);
+        send_error_response(client_fd, "question/answer", "400", "Missing or invalid responseTime");
+        return;
+    }
+
+    // Récupérer l'ID de la question actuelle et l'ID de players_session
+    int question_id = get_current_question_id(player_id, db);
+    if (question_id <= 0) {
+        printf("[WARN] No active question found for player_id=%d\n", player_id);
+        send_error_response(client_fd, "question/answer", "404", "No active question found");
+        return;
+    }
+
+    // Récupérer players_session_id pour ce joueur dans la dernière session playing
+    int players_session_id = -1;
+    sqlite3_stmt *stmt;
+    const char *sql = 
+        "SELECT ps.id "
+        "FROM players_session ps "
+        "JOIN sessions s ON ps.session_id = s.id "
+        "WHERE ps.player_id = ? AND s.status = 'playing' "
+        "ORDER BY s.id DESC LIMIT 1;";
+    
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, 0) == SQLITE_OK) {
+        sqlite3_bind_int(stmt, 1, player_id);
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            players_session_id = sqlite3_column_int(stmt, 0);
+        }
+    }
+    sqlite3_finalize(stmt);
+
+    if (players_session_id <= 0) {
+        printf("[WARN] No active players_session found for player_id=%d\n", player_id);
+        send_error_response(client_fd, "question/answer", "404", "No active session for player");
+        return;
+    }
+
+    printf("[DEBUG] Player %d (players_session_id=%d) answered: '%s' in %.2f sec (question_id=%d)\n",
+           player_id, players_session_id, answer_str, response_time, question_id);
+
+    // Stocker la réponse dans la DB
+    int store_result = store_player_answer(db, players_session_id, question_id, answer_str, response_time);
+    if (store_result) {
+        printf("[INFO] Answer stored successfully for players_session_id=%d\n", players_session_id);
+    } else {
+        printf("[ERROR] Failed to store answer for players_session_id=%d\n", players_session_id);
+    }
+
+    // Réponse standard au client
+    const char *resp =
+        "{\"action\":\"question/answer\",\"statut\":\"200\",\"message\":\"answer received\"}";
+    ssize_t sent = send(client_fd, resp, strlen(resp), 0);
+    if (sent < 0) {
+        printf("[ERROR] Failed to send response to player_id=%d\n", player_id);
+    } else {
+        printf("[INFO] Response sent to player_id=%d (%zd bytes)\n", player_id, sent);
+    }
+}
+// void handle_question_answer(const char *json, int client_fd, sqlite3 *db)
+// {
+//     // Récupération de l'ID du joueur
+//     int player_id = get_player_id_by_fd(client_fd);
+//     if (player_id <= 0) {
+//         printf("[WARN] Unauthenticated player tried to answer (fd=%d)\n", client_fd);
+//         send_error_response(client_fd, "question/answer", "401", "Player not authenticated");
+//         return;
+//     }
+//     printf("[INFO] Handling answer for player_id=%d\n", player_id);
+
+//     // Réponse : peut être int, bool ou string
+//     char answer_str[256] = {0};
+//     double response_time = 0.0;
+
+//     // Extraction de la réponse brute
+//     if (!extract_json_raw(json, "answer", answer_str, sizeof(answer_str))) {
+//         printf("[WARN] Missing answer from player_id=%d\n", player_id);
+//         send_error_response(client_fd, "question/answer", "400", "Missing answer");
+//         return;
+//     }
+
+//     // Extraction du temps de réponse
+//     if (!extract_json_double(json, "responseTime", &response_time)) {
+//         printf("[WARN] Invalid or missing responseTime from player_id=%d\n", player_id);
+//         send_error_response(client_fd, "question/answer", "400", "Missing or invalid responseTime");
+//         return;
+//     }
+
+//     // Récupérer l'ID de la question actuelle
+//     int question_id = get_current_question_id(player_id, db);
+//     if (question_id <= 0) {
+//         printf("[WARN] No active question found for player_id=%d\n", player_id);
+//         send_error_response(client_fd, "question/answer", "404", "No active question found");
+//         return;
+//     }
+
+//     printf("[DEBUG] Player %d answered: '%s' in %.2f sec (question_id=%d)\n",
+//            player_id, answer_str, response_time, question_id);
+
+//     // Stocker la réponse dans la DB
+//     int store_result = store_player_answer(db, player_id, question_id, answer_str, response_time);
+//     if (store_result) {
+//         printf("[INFO] Answer from player_id=%d stored successfully\n", player_id);
+//     } else {
+//         printf("[ERROR] Failed to store answer from player_id=%d\n", player_id);
+//     }
+
+//     // Réponse standard au client
+//     const char *resp =
+//         "{\"action\":\"question/answer\",\"statut\":\"200\",\"message\":\"answer received\"}";
+//     ssize_t sent = send(client_fd, resp, strlen(resp), 0);
+//     if (sent < 0) {
+//         printf("[ERROR] Failed to send response to player_id=%d\n", player_id);
+//     } else {
+//         printf("[INFO] Response sent to player_id=%d (%zd bytes)\n", player_id, sent);
+//     }
+// }
+
+// void handle_question_answer(const char *json, int client_fd, sqlite3 *db)
+// {
+//     int player_id = get_player_id_by_fd(client_fd);
+//     if (player_id <= 0) {
+//         send_error_response(client_fd, "question/answer", "401", "Player not authenticated");
+//         return;
+//     }
+
+//     // Réponse : peut être int, bool ou string
+//     char answer_str[256] = {0};
+//     double response_time = 0.0;
+
+//     // on récupère "answer":... SANS savoir le type
+//     if (!extract_json_raw(json, "answer", answer_str, sizeof(answer_str))) {
+//         send_error_response(client_fd, "question/answer", "400", "Missing answer");
+//         return;
+//     }
+
+//     if (!extract_json_double(json, "responseTime", &response_time)) {
+//         send_error_response(client_fd, "question/answer", "400", "Missing or invalid responseTime");
+//         return;
+//     }
+
+//     // Récupérer l'ID de la question en cours pour ce joueur / session
+//     int question_id = get_current_question_id(player_id, db);
+//     if (question_id <= 0) {
+//         send_error_response(client_fd, "question/answer", "404", "No active question found");
+//         return;
+//     }
+
+//     printf("[DEBUG] Player %d answered: %s in %.2f sec for question %d\n", player_id, answer_str, response_time, question_id);
+
+//     // Stocker la réponse dans la DB
+//     store_player_answer(db, player_id, question_id, answer_str, response_time);
+
+//     // Réponse standard
+//     const char *resp =
+//         "{\"action\":\"question/answer\",\"statut\":\"200\",\"message\":\"answer received\"}";
+//     send(client_fd, resp, strlen(resp), 0);
+// }
+
+void send_question_results(int session_id, sqlite3 *db)
+{
+    // Récupérer le max_players depuis la table sessions
+    int max_players = 0;
+    sqlite3_stmt *stmt;
+    const char *sql = "SELECT max_players FROM sessions WHERE id = ?";
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+        sqlite3_bind_int(stmt, 1, session_id);
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            max_players = sqlite3_column_int(stmt, 0);
+        }
+    }
+    sqlite3_finalize(stmt);
+
+    if (max_players <= 0) {
+        printf("DEBUG send_question_results: session %d max_players invalide, utilisation d'une valeur par défaut 10\n", session_id);
+        max_players = 10; // valeur par défaut si la session n'existe pas ou max_players invalide
+    }
+
+    // Charger toutes les réponses
+    PlayerResult results[max_players]; // ici max_players remplace MAX_PLAYERS
+    int count = load_session_results(db, session_id, results);
+
+    bool is_battle = session_is_battle(db, session_id);
+
+    char json[4096];
+    size_t len = 0;
+
+    len += sprintf(json + len,
+        "{\"action\":\"question/results\",\"statut\":\"200\","
+        "\"correctAnswer\":%d,"
+        "\"explanation\":\"%s\",",
+        get_correct_answer(db, session_id),
+        get_explanation(db, session_id)
+    );
+
+    if (is_battle) {
+        const char *last = compute_last_player(results, count);
+        len += sprintf(json + len, "\"lastPlayer\":\"%s\",", last);
+    }
+
+    len += sprintf(json + len, "\"results\":[");
+
+    for (int i = 0; i < count; i++) {
+        len += sprintf(json + len,
+            "%s{\"pseudo\":\"%s\",\"answer\":%d,\"correct\":%s,"
+            "\"points\":%d,\"totalScore\":%d",
+            i == 0 ? "" : ",",
+            results[i].pseudo,
+            results[i].answer,
+            results[i].correct ? "true" : "false",
+            results[i].points,
+            results[i].totalScore
+        );
+        if (is_battle) {
+            len += sprintf(json + len, ",\"responseTime\":%.2f,\"lives\":%d",
+                results[i].responseTime,
+                results[i].lives
+            );
+        }
+        len += sprintf(json + len, "}");
+    }
+
+    len += sprintf(json + len, "]}");
+
+    // Broadcast aux joueurs de la session
+    broadcast_to_session(db, session_id, json);
+}
+
+void send_player_eliminated(sqlite3 *db, int session_id, const char *pseudo)
+{
+    char json[256];
+    snprintf(json, sizeof(json),
+        "{\"action\":\"session/player/eliminated\",\"pseudo\":\"%s\"}", pseudo);
+
+    // Appel avec le db en premier paramètre
+    broadcast_to_session(db, session_id, json);
 }
 
 //
@@ -485,7 +766,7 @@ typedef struct {
 } SessionStartArgs;
 
 // Diffuse un message JSON à tous les joueurs d'une session
-static void broadcast_to_session(sqlite3 *db, int session_id, const char *message) {
+void broadcast_to_session(sqlite3 *db, int session_id, const char *message) {
     int fds[100];
     int count = get_session_fds(db, session_id, fds, 100);
     printf("DEBUG broadcast_to_session: session_id=%d, nb_joueurs=%d\n", session_id, count);
@@ -502,11 +783,98 @@ static void broadcast_to_session(sqlite3 *db, int session_id, const char *messag
 }
 
 // Envoie la question suivante (>1) d'une session
+// static void send_next_question(sqlite3 *db, int session_id) {
+//     // Récupérer le numéro de la question courante et nb_questions
+//     const char *sql_session = "SELECT current_question, nb_questions, time_limit FROM sessions WHERE id = ?";
+//     sqlite3_stmt *stmt_session;
+//     int current_question = 1;
+//     int nb_questions = 0;
+//     int time_limit = 30;
+
+//     if (sqlite3_prepare_v2(db, sql_session, -1, &stmt_session, NULL) == SQLITE_OK) {
+//         sqlite3_bind_int(stmt_session, 1, session_id);
+//         if (sqlite3_step(stmt_session) == SQLITE_ROW) {
+//             current_question = sqlite3_column_int(stmt_session, 0);
+//             nb_questions = sqlite3_column_int(stmt_session, 1);
+//             time_limit = sqlite3_column_int(stmt_session, 2);
+//         }
+//     }
+//     sqlite3_finalize(stmt_session);
+
+//     if (current_question > nb_questions) {
+//         printf("DEBUG send_next_question: toutes les questions ont déjà été envoyées\n");
+//         return;
+//     }
+
+//     // Récupérer la question courante
+//     const char *sql_question =
+//         "SELECT q.id, q.type, q.enonce, q.answers, q.difficulty "
+//         "FROM session_questions sq "
+//         "JOIN questions q ON sq.question_id = q.id "
+//         "WHERE sq.session_id = ? AND sq.num_question = ?";
+//     sqlite3_stmt *stmt_question;
+
+//     if (sqlite3_prepare_v2(db, sql_question, -1, &stmt_question, NULL) != SQLITE_OK) return;
+//     sqlite3_bind_int(stmt_question, 1, session_id);
+//     sqlite3_bind_int(stmt_question, 2, current_question);
+
+//     if (sqlite3_step(stmt_question) == SQLITE_ROW) {
+//         const unsigned char *type = sqlite3_column_text(stmt_question, 1);
+//         const unsigned char *enonce = sqlite3_column_text(stmt_question, 2);
+//         const unsigned char *answers_json = sqlite3_column_text(stmt_question, 3);
+//         const unsigned char *difficulty = sqlite3_column_text(stmt_question, 4);
+
+//         // Construire le JSON
+//         size_t capacity = 2048, length = 0;
+//         char *json = malloc(capacity);
+//         if (!json) { sqlite3_finalize(stmt_question); return; }
+//         json[0] = '\0';
+
+//         bool ok = append_str(&json, &length, &capacity, "POST question/new\n{");
+//         ok = ok && append_str(&json, &length, &capacity, "\"action\":\"question/new\",");
+//         char buf[64];
+//         snprintf(buf, sizeof(buf), "\"questionNum\":%d,\"totalQuestions\":%d", current_question, nb_questions);
+//         ok = ok && append_str(&json, &length, &capacity, buf);
+//         ok = ok && append_str(&json, &length, &capacity, ",\"type\":\"");
+//         ok = ok && append_json_string(&json, &length, &capacity, type);
+//         ok = ok && append_str(&json, &length, &capacity, "\",\"difficulty\":\"");
+//         ok = ok && append_json_string(&json, &length, &capacity, difficulty);
+//         ok = ok && append_str(&json, &length, &capacity, "\",\"question\":\"");
+//         ok = ok && append_json_string(&json, &length, &capacity, enonce);
+//         ok = ok && append_str(&json, &length, &capacity, "\"");
+//         ok = ok && append_str(&json, &length, &capacity, ",\"timeLimit\":");
+//         snprintf(buf, sizeof(buf), "%d", time_limit);
+//         ok = ok && append_str(&json, &length, &capacity, buf);
+
+//         if (type && strcmp((const char *)type, "qcm") == 0 && answers_json) {
+//             ok = ok && append_str(&json, &length, &capacity, ",\"answers\":");
+//             ok = ok && append_str(&json, &length, &capacity, (const char *)answers_json);
+//         }
+
+//         ok = ok && append_str(&json, &length, &capacity, "}\n");
+
+//         if (ok) broadcast_to_session(db, session_id, json);
+//         free(json);
+
+//         // Incrémenter current_question
+//         const char *sql_update = "UPDATE sessions SET current_question = ? WHERE id = ?";
+//         sqlite3_stmt *stmt_update;
+//         if (sqlite3_prepare_v2(db, sql_update, -1, &stmt_update, NULL) == SQLITE_OK) {
+//             sqlite3_bind_int(stmt_update, 1, current_question + 1);
+//             sqlite3_bind_int(stmt_update, 2, session_id);
+//             sqlite3_step(stmt_update);
+//         }
+//         sqlite3_finalize(stmt_update);
+//     }
+
+//     sqlite3_finalize(stmt_question);
+// }
+
 static void send_next_question(sqlite3 *db, int session_id) {
     // Récupérer le numéro de la question courante et nb_questions
     const char *sql_session = "SELECT current_question, nb_questions, time_limit FROM sessions WHERE id = ?";
     sqlite3_stmt *stmt_session;
-    int current_question = 1;
+    int current_question = 0; // départ à 0 pour la première question
     int nb_questions = 0;
     int time_limit = 30;
 
@@ -520,10 +888,12 @@ static void send_next_question(sqlite3 *db, int session_id) {
     }
     sqlite3_finalize(stmt_session);
 
-    if (current_question > nb_questions) {
+    if (current_question >= nb_questions) { // >= car current_question commence à 0
         printf("DEBUG send_next_question: toutes les questions ont déjà été envoyées\n");
         return;
     }
+
+    int question_num = current_question + 1; // décaler pour récupérer la question correcte
 
     // Récupérer la question courante
     const char *sql_question =
@@ -535,7 +905,7 @@ static void send_next_question(sqlite3 *db, int session_id) {
 
     if (sqlite3_prepare_v2(db, sql_question, -1, &stmt_question, NULL) != SQLITE_OK) return;
     sqlite3_bind_int(stmt_question, 1, session_id);
-    sqlite3_bind_int(stmt_question, 2, current_question);
+    sqlite3_bind_int(stmt_question, 2, question_num);
 
     if (sqlite3_step(stmt_question) == SQLITE_ROW) {
         const unsigned char *type = sqlite3_column_text(stmt_question, 1);
@@ -552,7 +922,7 @@ static void send_next_question(sqlite3 *db, int session_id) {
         bool ok = append_str(&json, &length, &capacity, "POST question/new\n{");
         ok = ok && append_str(&json, &length, &capacity, "\"action\":\"question/new\",");
         char buf[64];
-        snprintf(buf, sizeof(buf), "\"questionNum\":%d,\"totalQuestions\":%d", current_question, nb_questions);
+        snprintf(buf, sizeof(buf), "\"questionNum\":%d,\"totalQuestions\":%d", question_num, nb_questions);
         ok = ok && append_str(&json, &length, &capacity, buf);
         ok = ok && append_str(&json, &length, &capacity, ",\"type\":\"");
         ok = ok && append_json_string(&json, &length, &capacity, type);
@@ -575,11 +945,11 @@ static void send_next_question(sqlite3 *db, int session_id) {
         if (ok) broadcast_to_session(db, session_id, json);
         free(json);
 
-        // Incrémenter current_question
+        // Incrémenter current_question dans la DB
         const char *sql_update = "UPDATE sessions SET current_question = ? WHERE id = ?";
         sqlite3_stmt *stmt_update;
         if (sqlite3_prepare_v2(db, sql_update, -1, &stmt_update, NULL) == SQLITE_OK) {
-            sqlite3_bind_int(stmt_update, 1, current_question + 1);
+            sqlite3_bind_int(stmt_update, 1, question_num); // stocke la question envoyée
             sqlite3_bind_int(stmt_update, 2, session_id);
             sqlite3_step(stmt_update);
         }
@@ -589,7 +959,6 @@ static void send_next_question(sqlite3 *db, int session_id) {
     sqlite3_finalize(stmt_question);
 }
 
-
 static void *question_loop_thread(void *arg) {
     SessionStartArgs *args = (SessionStartArgs *)arg;
     sqlite3 *db = args->db;
@@ -597,21 +966,26 @@ static void *question_loop_thread(void *arg) {
 
     int nb_questions = args->nb_questions;
     int time_limit = 30; // par défaut
+    int current_question = 1; // initial par défaut
 
-    // Récupérer le time_limit réel
-    const char *sql = "SELECT time_limit FROM sessions WHERE id = ?";
+    // Récupérer le current_question et le time_limit réel depuis la DB
+    const char *sql = "SELECT current_question, time_limit FROM sessions WHERE id = ?";
     sqlite3_stmt *stmt;
     if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
         sqlite3_bind_int(stmt, 1, session_id);
         if (sqlite3_step(stmt) == SQLITE_ROW) {
-            time_limit = sqlite3_column_int(stmt, 0);
+            current_question = sqlite3_column_int(stmt, 0);
+            time_limit = sqlite3_column_int(stmt, 1);
         }
     }
     sqlite3_finalize(stmt);
 
-    // Boucle d'envoi des questions
-    for (int i = 1; i <= nb_questions; i++) {
-        sleep(time_limit); // attend le temps de réponse
+    printf("DEBUG question_loop_thread: session_id=%d, starting at question=%d, nb_questions=%d, time_limit=%d\n",
+           session_id, current_question, nb_questions, time_limit);
+
+    // Boucle d'envoi des questions suivantes
+    for (int i = current_question + 1; i <= nb_questions; i++) {
+        sleep(time_limit); // attendre le temps de réponse
         send_next_question(db, session_id);
     }
 
@@ -710,13 +1084,23 @@ static void send_first_question(sqlite3 *db, int session_id, int nb_questions) {
         } else {
             printf("DEBUG send_first_question: erreur construction JSON\n");
         }
-
+        
         free(json);
     } else {
         printf("DEBUG send_first_question: aucune question trouvée pour session_id=%d\n", session_id);
     }
 
     sqlite3_finalize(stmt);
+
+    // const char *sql_upd = "UPDATE sessions SET current_question = 2 WHERE id = ?";
+    // sqlite3_stmt *stmt_upd;
+
+    // if (sqlite3_prepare_v2(db, sql_upd, -1, &stmt_upd, NULL) == SQLITE_OK) {
+    //     sqlite3_bind_int(stmt_upd, 1, session_id);
+    //     sqlite3_step(stmt_upd);
+    // }
+    // sqlite3_finalize(stmt_upd);
+
 }
 
 // Thread qui gère le countdown et l'envoi de la première question
@@ -742,7 +1126,8 @@ static void *session_start_thread(void *arg) {
 
     // Envoyer la première question
     printf("DEBUG session_start_thread: envoi de la première question\n");
-    send_first_question(db, session_id, nb_questions);
+    // send_next_question(db, session_id, nb_questions);
+    send_next_question(db, session_id);
    
     // Lancer le thread pour les questions suivantes
     SessionStartArgs *args2 = malloc(sizeof(SessionStartArgs));

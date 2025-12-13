@@ -6,6 +6,15 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include "sha256.h"
+typedef struct {
+    char pseudo[50];
+    char answer[256];
+    bool correct;
+    int points;
+    int totalScore;
+    double responseTime;
+    int lives;
+} PlayerResult;
 
 void create_tables(sqlite3 *db);
 int insert_theme(sqlite3 *db, const char *name);
@@ -37,4 +46,14 @@ int count_players_in_session(void* db, int session_id);
 bool is_session_creator(sqlite3 *db, int session_id, int player_id);
 int update_session_status(sqlite3 *db, int session_id, const char *status);
 int select_questions_for_session(sqlite3 *db, int session_id, int nb_questions);
+int store_player_answer(sqlite3 *db, int players_session_id, int question_id, const char *player_answer, double response_time);
+
+
+int load_session_results(sqlite3 *db, int session_id, PlayerResult *results);
+bool session_is_battle(sqlite3 *db, int session_id);
+const char *get_correct_answer(sqlite3 *db, int session_id);
+const char *get_explanation(sqlite3 *db, int session_id);
+const char *compute_last_player(PlayerResult *results, int count);
+int get_current_question_id(int player_id, sqlite3 *db);
+
 #endif

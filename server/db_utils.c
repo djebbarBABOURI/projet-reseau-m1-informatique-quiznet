@@ -35,7 +35,8 @@ void create_tables(sqlite3 *db) {
         "    type TEXT CHECK(type IN ('qcm','boolean','text')),"
         "    enonce TEXT,"
         "    answers TEXT,"
-        "    correct_answer TEXT"
+        "    correct_answer TEXT,"
+        "    explanation TEXT DEFAULT 'Aucune explication'"
         ");",
 
         "CREATE TABLE IF NOT EXISTS sessions ("
@@ -48,7 +49,7 @@ void create_tables(sqlite3 *db) {
         "    max_players INTEGER,"
         "    status TEXT CHECK(status IN ('waiting','playing','finished')),"
         "    created_by INTEGER REFERENCES players(id),"
-        "    current_question INTEGER DEFAULT 1"
+        "    current_question INTEGER DEFAULT 0"
         ");",
 
         "CREATE TABLE IF NOT EXISTS themes_session ("
@@ -982,3 +983,657 @@ int select_questions_for_session(sqlite3 *db, int session_id, int nb_questions) 
     
     return questions_selected;
 }
+
+int get_correct_answer_positions(
+    sqlite3 *db,
+    int question_id,
+    int *positions,
+    int max_positions
+) {
+    if (!db || !positions || max_positions <= 0) return -1;
+
+    sqlite3_stmt *stmt;
+    char answers_raw[1024] = {0};
+    char correct_raw[1024] = {0};
+
+    /* 1. Récupérer answers et correct_answer */
+    const char *sql =
+        "SELECT answers, correct_answer FROM questions WHERE id = ?";
+
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK)
+        return -1;
+
+    sqlite3_bind_int(stmt, 1, question_id);
+
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        const unsigned char *a = sqlite3_column_text(stmt, 0);
+        const unsigned char *c = sqlite3_column_text(stmt, 1);
+
+        if (a) strncpy(answers_raw, (const char *)a, sizeof(answers_raw) - 1);
+        if (c) strncpy(correct_raw, (const char *)c, sizeof(correct_raw) - 1);
+    } else {
+        sqlite3_finalize(stmt);
+        return -1;
+    }
+    sqlite3_finalize(stmt);
+
+    /* 2. Nettoyer answers */
+    char answers_clean[1024] = {0};
+    int j = 0;
+    for (int i = 0; answers_raw[i]; i++) {
+        if (answers_raw[i] != '[' &&
+            answers_raw[i] != ']' &&
+            answers_raw[i] != '"')
+        {
+            answers_clean[j++] = answers_raw[i];
+        }
+    }
+    answers_clean[j] = '\0';
+
+    /* 3. Nettoyer correct_answer */
+    char correct_clean[1024] = {0};
+    j = 0;
+    for (int i = 0; correct_raw[i]; i++) {
+        if (correct_raw[i] != '[' &&
+            correct_raw[i] != ']' &&
+            correct_raw[i] != '"')
+        {
+            correct_clean[j++] = correct_raw[i];
+        }
+    }
+    correct_clean[j] = '\0';
+
+    /* 4. Trouver les indices */
+    int found = 0;
+
+    char *answers_copy = strdup(answers_clean);
+    char *correct_copy = strdup(correct_clean);
+
+    char *correct_tok = strtok(correct_copy, ",");
+
+    while (correct_tok && found < max_positions) {
+
+        while (*correct_tok == ' ') correct_tok++;
+        char *end = correct_tok + strlen(correct_tok) - 1;
+        while (end > correct_tok && *end == ' ') *end-- = '\0';
+
+        int index = 0;
+        char *answers_tok = strtok(answers_copy, ",");
+
+        while (answers_tok) {
+
+            while (*answers_tok == ' ') answers_tok++;
+            end = answers_tok + strlen(answers_tok) - 1;
+            while (end > answers_tok && *end == ' ') *end-- = '\0';
+
+            if (strcmp(answers_tok, correct_tok) == 0) {
+                positions[found++] = index;
+                break;
+            }
+
+            index++;
+            answers_tok = strtok(NULL, ",");
+        }
+
+        /* reset answers tokenizer */
+        strcpy(answers_copy, answers_clean);
+        correct_tok = strtok(NULL, ",");
+    }
+
+    free(answers_copy);
+    free(correct_copy);
+
+    return found;
+}
+
+
+void trim_quotes_spaces(char *s) {
+    if (!s) return;
+    // début
+    char *p = s;
+    while (*p == ' ' || *p == '"') p++;
+    memmove(s, p, strlen(p)+1);
+
+    // fin
+    int len = strlen(s);
+    while(len > 0 && (s[len-1] == ' ' || s[len-1] == '"')) s[--len] = '\0';
+}
+
+// Fonction principale pour stocker la réponse d'un joueur
+int store_player_answer(sqlite3 *db, int players_session_id, int question_id, const char *player_answer, double response_time) {
+    if (!db || !player_answer) return -1;
+
+    int correct = 0;
+    int points = 0;
+
+    // 1. Récupérer correct_answer, difficulty, type et answers (pour QCM)
+    const char *sql_get = "SELECT correct_answer, difficulty, type, answers FROM questions WHERE id = ?";
+    sqlite3_stmt *stmt;
+    if (sqlite3_prepare_v2(db, sql_get, -1, &stmt, NULL) != SQLITE_OK) {
+        fprintf(stderr, "[ERROR] prepare SELECT: %s\n", sqlite3_errmsg(db));
+        return -1;
+    }
+    sqlite3_bind_int(stmt, 1, question_id);
+
+    char correct_answer[1024] = {0};
+    char difficulty[32] = {0};
+    char type[32] = {0};
+    char answers[1024] = {0};
+
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        const unsigned char *c = sqlite3_column_text(stmt, 0);
+        const unsigned char *d = sqlite3_column_text(stmt, 1);
+        const unsigned char *t = sqlite3_column_text(stmt, 2);
+        const unsigned char *a = sqlite3_column_text(stmt, 3);
+
+        if (c) strncpy(correct_answer, (const char *)c, sizeof(correct_answer)-1);
+        if (d) strncpy(difficulty, (const char *)d, sizeof(difficulty)-1);
+        if (t) strncpy(type, (const char *)t, sizeof(type)-1);
+        if (a) strncpy(answers, (const char *)a, sizeof(answers)-1);
+    } else {
+        sqlite3_finalize(stmt);
+        fprintf(stderr, "[ERROR] Question non trouvée (id=%d)\n", question_id);
+        return -1;
+    }
+    sqlite3_finalize(stmt);
+
+    printf("[DEBUG] Raw data -> player_answer='%s', correct_answer='%s', type='%s', answers='%s'\n",
+           player_answer, correct_answer, type, answers);
+
+    // Nettoyer player_answer
+    char player_clean[1024];
+    strncpy(player_clean, player_answer, sizeof(player_clean)-1);
+    player_clean[sizeof(player_clean)-1] = '\0';
+    trim_quotes_spaces(player_clean);
+    printf("[DEBUG] Cleaned player_answer='%s'\n", player_clean);
+
+    // 2. Vérifier le type
+   if (strcmp(type, "qcm") == 0) {
+    int positions[10]; // max 10 bonnes réponses
+    int nb_correct = get_correct_answer_positions(db, question_id, positions, 10);
+    printf("[DEBUG] QCM nb_correct=%d, positions=", nb_correct);
+    for(int i=0;i<nb_correct;i++) printf("%d ", positions[i]);
+    printf("\n");
+
+    // Nettoyer answers
+    char answers_clean[1024];
+    strncpy(answers_clean, answers, sizeof(answers_clean)-1);
+    answers_clean[sizeof(answers_clean)-1] = '\0';
+    trim_quotes_spaces(answers_clean);
+
+    // Convertir player_answer en entier (indice)
+    int player_idx = atoi(player_clean);
+    printf("[DEBUG-QCM] Player selected index=%d\n", player_idx);
+
+    // Vérifier si l'indice est dans les positions correctes
+    correct = 0;
+    for (int i = 0; i < nb_correct; i++) {
+        if (player_idx == positions[i]) {
+            correct = 1;
+            break;
+        }
+    }
+    printf("[DEBUG-QCM] Result correct=%d\n", correct);
+}else if (strcmp(type, "boolean") == 0 || strcmp(type, "text") == 0) {
+        // Nettoyer correct_answer
+        char clean_correct[1024] = {0};
+        int j = 0;
+        for (int i = 0; correct_answer[i] != '\0' && j < sizeof(clean_correct)-1; i++) {
+            if (correct_answer[i] != '[' && correct_answer[i] != ']' && correct_answer[i] != '"') {
+                clean_correct[j++] = correct_answer[i];
+            }
+        }
+        clean_correct[j] = '\0';
+        trim_quotes_spaces(clean_correct);
+        printf("[DEBUG] Cleaned correct_answer='%s'\n", clean_correct);
+
+        // Comparer exactement
+        correct = (strcmp(clean_correct, player_clean) == 0) ? 1 : 0;
+        printf("[DEBUG] Result correct=%d\n", correct);
+    }
+
+    // 3. Calculer points selon la difficulté
+    if (correct) {
+        if (strcmp(difficulty, "facile") == 0) points = 10;
+        else if (strcmp(difficulty, "moyen") == 0) points = 20;
+        else if (strcmp(difficulty, "difficile") == 0) points = 30;
+    }
+    printf("[DEBUG] points=%d\n", points);
+
+    // 4. Insérer dans la table
+    const char *sql_insert =
+        "INSERT INTO answers (players_session_id, question_id, answer, response_time, correct, points) "
+        "VALUES (?, ?, ?, ?, ?, ?);";
+
+    if (sqlite3_prepare_v2(db, sql_insert, -1, &stmt, NULL) != SQLITE_OK) {
+        fprintf(stderr, "[ERROR] prepare INSERT: %s\n", sqlite3_errmsg(db));
+        return -1;
+    }
+
+    sqlite3_bind_int(stmt, 1, players_session_id);
+    sqlite3_bind_int(stmt, 2, question_id);
+    sqlite3_bind_text(stmt, 3, player_clean, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_double(stmt, 4, response_time);
+    sqlite3_bind_int(stmt, 5, correct);
+    sqlite3_bind_int(stmt, 6, points);
+
+    int rc = sqlite3_step(stmt);
+    if (rc != SQLITE_DONE) {
+        fprintf(stderr, "[ERROR] INSERT: %s\n", sqlite3_errmsg(db));
+        sqlite3_finalize(stmt);
+        return -1;
+    }
+
+    sqlite3_finalize(stmt);
+    printf("[DEBUG] Answer stored successfully: correct=%d, points=%d\n", correct, points);
+    return 0;
+}
+
+// int store_player_answer(sqlite3 *db, int players_session_id, int question_id, const char *player_answer, double response_time) {
+//     if (!db || !player_answer) return -1;
+
+//     int correct = 0;
+//     int points = 0;
+
+//     // 1. Récupérer la réponse correcte et la difficulté
+//     const char *sql_get = "SELECT correct_answer, difficulty, type FROM questions WHERE id = ?";
+//     sqlite3_stmt *stmt;
+//     if (sqlite3_prepare_v2(db, sql_get, -1, &stmt, NULL) != SQLITE_OK) {
+//         fprintf(stderr, "Erreur prepare SELECT: %s\n", sqlite3_errmsg(db));
+//         return -1;
+//     }
+//     sqlite3_bind_int(stmt, 1, question_id);
+
+//     char correct_answer[1024] = {0};
+//     char difficulty[32] = {0};
+//     char type[32] = {0};
+
+//     if (sqlite3_step(stmt) == SQLITE_ROW) {
+//         const unsigned char *c = sqlite3_column_text(stmt, 0);
+//         const unsigned char *d = sqlite3_column_text(stmt, 1);
+//         const unsigned char *t = sqlite3_column_text(stmt, 2);
+//         if (c) strncpy(correct_answer, (const char *)c, sizeof(correct_answer)-1);
+//         if (d) strncpy(difficulty, (const char *)d, sizeof(difficulty)-1);
+//         if (t) strncpy(type, (const char *)t, sizeof(type)-1);
+//     } else {
+//         sqlite3_finalize(stmt);
+//         fprintf(stderr, "Question non trouvée (id=%d)\n", question_id);
+//         return -1;
+//     }
+//     sqlite3_finalize(stmt);
+
+//     // Affichage debug
+//     printf("player_answer: %s\n", player_answer);
+//     printf("correct_answer (raw): %s\n", correct_answer);
+//     printf("type (type): %s\n", type);
+
+//     // Vérifier si c'est un QCM ou boolean (stocké en ["..."])
+//     if (correct_answer[0] == '[') {
+//         // Nettoyer la chaîne JSON
+//         char clean[1024] = {0};
+//         int j = 0;
+//         for (int i = 0; correct_answer[i] != '\0' && j < sizeof(clean)-1; i++) {
+//             if (correct_answer[i] != '[' && correct_answer[i] != ']' && correct_answer[i] != '"') {
+//                 clean[j++] = correct_answer[i];
+//             }
+//         }
+//         clean[j] = '\0';
+
+//         // Tableau des bonnes réponses séparées par des virgules
+//         char *correct_copy = strdup(clean);
+//         char *token;
+//         bool all_found = true;
+
+//         token = strtok(correct_copy, ",");
+//         while (token) {
+//             // Supprimer espaces en début et fin
+//             while (*token == ' ') token++;
+//             char *end = token + strlen(token) - 1;
+//             while (end > token && *end == ' ') *end-- = '\0';
+
+//             if (!strstr(player_answer, token)) {
+//                 all_found = false;
+//                 break;
+//             }
+//             token = strtok(NULL, ",");
+//         }
+//         free(correct_copy);
+//         correct = all_found ? 1 : 0;
+//     } else {
+//         // Text ou boolean simple
+//         char clean[512] = {0};
+//         int j = 0;
+//         for (int i = 0; correct_answer[i] != '\0' && j < sizeof(clean)-1; i++) {
+//             if (correct_answer[i] != '[' && correct_answer[i] != ']' && correct_answer[i] != '"') {
+//                 clean[j++] = correct_answer[i];
+//             }
+//         }
+//         clean[j] = '\0';
+//         correct = (strcmp(player_answer, clean) == 0) ? 1 : 0;
+//     }
+
+//     // Calcul points selon difficulté
+//     if (correct) {
+//         if (strcmp(difficulty, "facile") == 0) points = 10;
+//         else if (strcmp(difficulty, "moyen") == 0) points = 20;
+//         else if (strcmp(difficulty, "difficile") == 0) points = 30;
+//     }
+
+//     // 3. Insérer la réponse
+//     const char *sql_insert =
+//         "INSERT INTO answers (players_session_id, question_id, answer, response_time, correct, points) "
+//         "VALUES (?, ?, ?, ?, ?, ?);";
+
+//     if (sqlite3_prepare_v2(db, sql_insert, -1, &stmt, NULL) != SQLITE_OK) {
+//         fprintf(stderr, "Erreur prepare INSERT: %s\n", sqlite3_errmsg(db));
+//         return -1;
+//     }
+
+//     sqlite3_bind_int(stmt, 1, players_session_id);
+//     sqlite3_bind_int(stmt, 2, question_id);
+//     sqlite3_bind_text(stmt, 3, player_answer, -1, SQLITE_TRANSIENT);
+//     sqlite3_bind_double(stmt, 4, response_time);
+//     sqlite3_bind_int(stmt, 5, correct);
+//     sqlite3_bind_int(stmt, 6, points);
+
+//     int rc = sqlite3_step(stmt);
+//     if (rc != SQLITE_DONE) {
+//         fprintf(stderr, "Erreur INSERT: %s\n", sqlite3_errmsg(db));
+//         sqlite3_finalize(stmt);
+//         return -1;
+//     }
+
+//     sqlite3_finalize(stmt);
+//     return 0;
+// }
+
+// stocke la réponse d'un joueur pour une question
+// int store_player_answer(sqlite3 *db, int players_session_id, int question_id, const char *player_answer, double response_time) {
+//     if (!db || !player_answer) return -1;
+
+//     int correct = 0;
+//     int points = 0;
+
+//     // 1. Récupérer la réponse correcte depuis la table questions
+//     const char *sql_get = "SELECT correct_answer, difficulty FROM questions WHERE id = ?";
+//     sqlite3_stmt *stmt;
+//     if (sqlite3_prepare_v2(db, sql_get, -1, &stmt, NULL) != SQLITE_OK) {
+//         fprintf(stderr, "Erreur prepare store_player_answer SELECT: %s\n", sqlite3_errmsg(db));
+//         return -1;
+//     }
+//     sqlite3_bind_int(stmt, 1, question_id);
+
+//     char correct_answer[512] = {0};
+//     char difficulty[32] = {0};
+
+//     if (sqlite3_step(stmt) == SQLITE_ROW) {
+//         const unsigned char *c = sqlite3_column_text(stmt, 0);
+//         const unsigned char *d = sqlite3_column_text(stmt, 1);
+//         if (c) strncpy(correct_answer, (const char *)c, sizeof(correct_answer)-1);
+//         if (d) strncpy(difficulty, (const char *)d, sizeof(difficulty)-1);
+//     } else {
+//         sqlite3_finalize(stmt);
+//         fprintf(stderr, "Question non trouvée (id=%d)\n", question_id);
+//         return -1;
+//     }
+//     sqlite3_finalize(stmt);
+//     int cmp = strcmp(player_answer, correct_answer);
+
+//     // Affichage des deux valeurs et du résultat de strcmp
+//     printf("player_answer: %s\n", player_answer);
+//     printf("correct_answer: %s\n", correct_answer);
+//     printf("strcmp(player_answer, correct_answer) = %d\n", cmp);
+//     // 2. Comparer la réponse du joueur avec la réponse correcte
+//     if (cmp == 0) {
+//         correct = 1;
+
+//         // Calculer les points selon la difficulté
+//         if (strcmp(difficulty, "facile") == 0) points = 10;
+//         else if (strcmp(difficulty, "moyen") == 0) points = 20;
+//         else if (strcmp(difficulty, "difficile") == 0) points = 30;
+//     } else {
+//         correct = 0;
+//         points = 0;
+//     }
+
+//     // 3. Insérer la réponse dans la table answers
+//     const char *sql_insert =
+//         "INSERT INTO answers (players_session_id, question_id, answer, response_time, correct, points) "
+//         "VALUES (?, ?, ?, ?, ?, ?);";
+    
+//     if (sqlite3_prepare_v2(db, sql_insert, -1, &stmt, NULL) != SQLITE_OK) {
+//         fprintf(stderr, "Erreur prepare store_player_answer INSERT: %s\n", sqlite3_errmsg(db));
+//         return -1;
+//     }
+
+//     sqlite3_bind_int(stmt, 1, players_session_id);
+//     sqlite3_bind_int(stmt, 2, question_id);
+//     sqlite3_bind_text(stmt, 3, player_answer, -1, SQLITE_TRANSIENT);
+//     sqlite3_bind_double(stmt, 4, response_time);
+//     sqlite3_bind_int(stmt, 5, correct);
+//     sqlite3_bind_int(stmt, 6, points);
+
+//     int rc = sqlite3_step(stmt);
+//     if (rc != SQLITE_DONE) {
+//         fprintf(stderr, "Erreur store_player_answer INSERT: %s\n", sqlite3_errmsg(db));
+//         sqlite3_finalize(stmt);
+//         return -1;
+//     }
+
+//     sqlite3_finalize(stmt);
+//     return 0;
+// }
+
+
+int load_session_results(sqlite3 *db, int session_id, PlayerResult *results) {
+    sqlite3_stmt *stmt;
+    const char *sql = "SELECT pseudo, answer, correct, points, total_score, response_time, lives "
+                      "FROM player_results WHERE session_id = ?";
+
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+        fprintf(stderr, "Failed to prepare statement: %s\n", sqlite3_errmsg(db));
+        return 0;
+    }
+
+    sqlite3_bind_int(stmt, 1, session_id);
+
+    int i = 0;
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        strncpy(results[i].pseudo, (const char *)sqlite3_column_text(stmt, 0), sizeof(results[i].pseudo)-1);
+        strncpy(results[i].answer, (const char *)sqlite3_column_text(stmt, 1), sizeof(results[i].answer)-1);
+        results[i].correct = sqlite3_column_int(stmt, 2);
+        results[i].points = sqlite3_column_int(stmt, 3);
+        results[i].totalScore = sqlite3_column_int(stmt, 4);
+        results[i].responseTime = sqlite3_column_double(stmt, 5);
+        results[i].lives = sqlite3_column_int(stmt, 6);
+        i++;
+    }
+
+    sqlite3_finalize(stmt);
+    return i; // nombre de joueurs chargés
+}
+
+
+bool session_is_battle(sqlite3 *db, int session_id) {
+    sqlite3_stmt *stmt;
+    const char *sql = "SELECT is_battle FROM sessions WHERE id = ?";
+
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) return false;
+    sqlite3_bind_int(stmt, 1, session_id);
+
+    bool result = false;
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        result = sqlite3_column_int(stmt, 0) != 0;
+    }
+
+    sqlite3_finalize(stmt);
+    return result;
+}
+
+
+const char *get_correct_answer(sqlite3 *db, int session_id) {
+    static char answer[256];
+    sqlite3_stmt *stmt;
+    const char *sql = "SELECT correct_answer FROM questions "
+                      "WHERE id = (SELECT current_question_id FROM sessions WHERE id = ?)";
+
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) return NULL;
+    sqlite3_bind_int(stmt, 1, session_id);
+
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        strncpy(answer, (const char *)sqlite3_column_text(stmt, 0), sizeof(answer)-1);
+    } else {
+        answer[0] = '\0';
+    }
+
+    sqlite3_finalize(stmt);
+    return answer;
+}
+
+const char *get_explanation(sqlite3 *db, int session_id) {
+    static char explanation[512];
+    sqlite3_stmt *stmt;
+    const char *sql = "SELECT explanation FROM questions "
+                      "WHERE id = (SELECT current_question_id FROM sessions WHERE id = ?)";
+
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) return NULL;
+    sqlite3_bind_int(stmt, 1, session_id);
+
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        strncpy(explanation, (const char *)sqlite3_column_text(stmt, 0), sizeof(explanation)-1);
+    } else {
+        explanation[0] = '\0';
+    }
+
+    sqlite3_finalize(stmt);
+    return explanation;
+}
+
+
+const char *compute_last_player(PlayerResult *results, int count) {
+    if (count <= 0) return NULL;
+    return results[count - 1].pseudo; // simple stratégie : dernier du tableau
+}
+
+// int get_current_question_id(int player_id, sqlite3 *db) {
+//     int question_id = -1;
+//     sqlite3_stmt *stmt;
+
+//     const char *sql = 
+//         "SELECT s.current_question "
+//         "FROM players_session ps "
+//         "JOIN sessions s ON ps.session_id = s.id "
+//         "WHERE ps.player_id = ? "
+//         "AND s.status = 'playing' "
+//         "ORDER BY s.id DESC "
+//         "LIMIT 1;";
+
+//     if (sqlite3_prepare_v2(db, sql, -1, &stmt, 0) != SQLITE_OK) {
+//         fprintf(stderr, "[ERROR] Failed to prepare statement: %s\n", sqlite3_errmsg(db));
+//         return -1;
+//     }
+
+//     sqlite3_bind_int(stmt, 1, player_id);
+
+//     if (sqlite3_step(stmt) == SQLITE_ROW) {
+//         question_id = sqlite3_column_int(stmt, 0);
+//         printf("[DEBUG] Current question for player_id=%d in latest session is %d\n", player_id, question_id);
+//     } else {
+//         printf("[WARN] No active playing session found for player_id=%d\n", player_id);
+//     }
+
+//     sqlite3_finalize(stmt);
+//     return (question_id-1);
+// }
+int get_current_question_id(int player_id, sqlite3 *db)
+{
+    int question_id = -1;
+    int session_id = -1;
+    int num_question = -1;
+
+    sqlite3_stmt *stmt;
+
+    const char *sql =
+        "SELECT s.id AS session_id, "
+        "       s.current_question AS num_question, "
+        "       sq.question_id "
+        "FROM players_session ps "
+        "JOIN sessions s ON ps.session_id = s.id "
+        "JOIN session_questions sq "
+        "     ON sq.session_id = s.id "
+        "    AND sq.num_question = s.current_question "
+        "WHERE ps.player_id = ? "
+        "  AND s.status = 'playing' "
+        "ORDER BY s.id DESC "
+        "LIMIT 1;";
+
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+        fprintf(stderr,
+            "[ERROR] SQL prepare failed: %s\n",
+            sqlite3_errmsg(db));
+        return -1;
+    }
+
+    sqlite3_bind_int(stmt, 1, player_id);
+
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        session_id   = sqlite3_column_int(stmt, 0);
+        num_question = sqlite3_column_int(stmt, 1);
+        question_id  = sqlite3_column_int(stmt, 2);
+
+        printf(
+            "[DEBUG] get_current_question_id():\n"
+            "        session_id   = %d\n"
+            "        num_question = %d\n"
+            "        question_id  = %d\n",
+            session_id,
+            num_question,
+            question_id
+        );
+    } else {
+        printf(
+            "[WARN] No active playing session found for player_id=%d\n",
+            player_id
+        );
+    }
+
+    sqlite3_finalize(stmt);
+    return question_id;
+}
+
+// int get_current_question_id(int player_id, sqlite3 *db)
+// {
+//     int question_id = -1;
+//     sqlite3_stmt *stmt;
+
+//     const char *sql =
+//         "SELECT sq.question_id "
+//         "FROM players_session ps "
+//         "JOIN sessions s ON ps.session_id = s.id "
+//         "JOIN session_questions sq "
+//         "  ON sq.session_id = s.id "
+//         " AND sq.num_question = s.current_question "
+//         "WHERE ps.player_id = ? "
+//         "  AND s.status = 'playing' "
+//         "ORDER BY s.id DESC "
+//         "LIMIT 1;";
+
+//     if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+//         fprintf(stderr, "[ERROR] get_current_question_id prepare: %s\n",
+//                 sqlite3_errmsg(db));
+//         return -1;
+//     }
+
+//     sqlite3_bind_int(stmt, 1, player_id);
+
+//     if (sqlite3_step(stmt) == SQLITE_ROW) {
+//         question_id = sqlite3_column_int(stmt, 0);
+//         printf("[DEBUG] Current question_id=%d for player_id=%d\n",
+//                question_id, player_id);
+//     } else {
+//         printf("[WARN] No current question found for player_id=%d\n", player_id);
+//     }
+
+//     sqlite3_finalize(stmt);
+//     return question_id;
+// }

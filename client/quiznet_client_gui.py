@@ -392,9 +392,6 @@ class QuizNetGUI:
                                       state=tk.DISABLED, style='Danger.TButton')
         self.skip_button.pack(side=tk.LEFT, padx=10)
         
-        # Fonction pour mettre à jour le texte des boutons de jokers
-        self.update_jokers_display()
-        
         # Bouton de réponse avec style
         self.submit_button = ttk.Button(self.game_frame, text="✅ Envoyer la réponse", 
                                        command=self.submit_answer, state=tk.DISABLED,
@@ -565,272 +562,7 @@ class QuizNetGUI:
             status_emoji = "🟢" if session.get("status") == "waiting" else "🟡" if session.get("status") == "playing" else "🔴"
             session_text = f"{status_emoji} [{session.get('id')}] {session.get('name')} - {session.get('nbPlayers')}/{session.get('maxPlayers')} - {session.get('mode')}"
             self.sessions_listbox.insert(tk.END, session_text)
-    
-    # def show_create_session_dialog(self):
-    #     """Affiche la boîte de dialogue de création de session"""
-    #     dialog = tk.Toplevel(self.root)
-    #     dialog.title("➕ Créer une session")
-    #     dialog.geometry("500x650")
-    #     dialog.transient(self.root)
-    #     dialog.grab_set()
-    #     dialog.configure(bg=self.colors['bg'])
-        
-    #     # Titre
-    #     title_frame = ttk.Frame(dialog)
-    #     title_frame.grid(row=0, column=0, columnspan=3, pady=(10, 20), sticky=(tk.W, tk.E))
-    #     ttk.Label(title_frame, text="➕ Créer une nouvelle session", 
-    #              style='Title.TLabel').pack()
-        
-    #     # Container principal avec padding
-    #     main_container = ttk.Frame(dialog, padding="15")
-    #     main_container.grid(row=1, column=0, columnspan=3, sticky=(tk.W, tk.E))
-        
-    #     # Thèmes
-    #     themes_frame = ttk.LabelFrame(main_container, text="📚 Thèmes (sélection multiple)", padding="10")
-    #     themes_frame.grid(row=0, column=0, columnspan=2, pady=8, sticky=(tk.W, tk.E))
-        
-    #     themes_listbox = tk.Listbox(themes_frame, selectmode=tk.MULTIPLE, height=8, 
-    #                                exportselection=False, font=('Arial', 10),
-    #                                selectbackground=self.colors['primary'],
-    #                                selectforeground='white')
-    #     themes_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-    #     scrollbar = ttk.Scrollbar(themes_frame, orient=tk.VERTICAL, command=themes_listbox.yview)
-    #     scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-    #     themes_listbox.config(yscrollcommand=scrollbar.set)
-    #     for index, theme in enumerate(self.themes):
-    #         themes_listbox.insert(tk.END, f"[{theme.get('id')}] {theme.get('name')}")
-    #         if theme.get("id") in self.selected_theme_ids:
-    #             themes_listbox.selection_set(index)
-        
-    #     # Difficulté
-    #     difficulty_frame = ttk.LabelFrame(main_container, text="⚙️ Paramètres", padding="10")
-    #     difficulty_frame.grid(row=1, column=0, columnspan=2, pady=8, sticky=(tk.W, tk.E))
-        
-    #     ttk.Label(difficulty_frame, text="Difficulté:", font=('Arial', 10, 'bold')).grid(row=0, column=0, sticky=tk.W, pady=5, padx=5)
-    #     difficulty_var = tk.StringVar(value="moyen")
-    #     difficulty_combo = ttk.Combobox(difficulty_frame, textvariable=difficulty_var, 
-    #                                    values=["facile", "moyen", "difficile"], 
-    #                                    state="readonly", width=25, font=('Arial', 10))
-    #     difficulty_combo.grid(row=0, column=1, pady=5, padx=5, sticky=(tk.W, tk.E))
-        
-    #     # Nombre de questions
-    #     ttk.Label(difficulty_frame, text="Nombre de questions (10-50):", font=('Arial', 10, 'bold')).grid(row=1, column=0, sticky=tk.W, pady=5, padx=5)
-    #     nb_questions_entry = ttk.Entry(difficulty_frame, width=25, font=('Arial', 10))
-    #     nb_questions_entry.insert(0, "20")
-    #     nb_questions_entry.grid(row=1, column=1, pady=5, padx=5, sticky=(tk.W, tk.E))
-        
-    #     # Temps limite
-    #     ttk.Label(difficulty_frame, text="Temps limite (10-60 sec):", font=('Arial', 10, 'bold')).grid(row=2, column=0, sticky=tk.W, pady=5, padx=5)
-    #     time_limit_entry = ttk.Entry(difficulty_frame, width=25, font=('Arial', 10))
-    #     time_limit_entry.insert(0, "30")
-    #     time_limit_entry.grid(row=2, column=1, pady=5, padx=5, sticky=(tk.W, tk.E))
-        
-    #     # Mode
-    #     ttk.Label(difficulty_frame, text="Mode:", font=('Arial', 10, 'bold')).grid(row=3, column=0, sticky=tk.W, pady=5, padx=5)
-    #     mode_var = tk.StringVar(value="solo")
-    #     mode_combo = ttk.Combobox(difficulty_frame, textvariable=mode_var, 
-    #                              values=["solo", "battle"], state="readonly",
-    #                              width=25, font=('Arial', 10))
-    #     mode_combo.grid(row=3, column=1, pady=5, padx=5, sticky=(tk.W, tk.E))
-        
-    #     # Nombre max de joueurs
-    #     ttk.Label(difficulty_frame, text="Nombre max de joueurs:", font=('Arial', 10, 'bold')).grid(row=4, column=0, sticky=tk.W, pady=5, padx=5)
-    #     max_players_entry = ttk.Entry(difficulty_frame, width=25, font=('Arial', 10))
-    #     max_players_entry.insert(0, "6")
-    #     max_players_entry.grid(row=4, column=1, pady=5, padx=5, sticky=(tk.W, tk.E))
-        
-    #     # Nom de la session
-    #     name_frame = ttk.LabelFrame(main_container, text="📝 Informations", padding="10")
-    #     name_frame.grid(row=2, column=0, columnspan=2, pady=8, sticky=(tk.W, tk.E))
-        
-    #     ttk.Label(name_frame, text="Nom de la session:", font=('Arial', 10, 'bold')).grid(row=0, column=0, sticky=tk.W, pady=5, padx=5)
-    #     name_entry = ttk.Entry(name_frame, width=35, font=('Arial', 10))
-    #     name_entry.grid(row=0, column=1, pady=5, padx=5, sticky=(tk.W, tk.E))
-        
-    #     difficulty_frame.columnconfigure(1, weight=1)
-    #     name_frame.columnconfigure(1, weight=1)
-    #     main_container.columnconfigure(0, weight=1)
-        
-    #     # Label de statut pour le feedback
-    #     status_frame = ttk.Frame(dialog)
-    #     status_frame.grid(row=2, column=0, columnspan=3, pady=10)
-    #     status_label = ttk.Label(status_frame, text="", foreground=self.colors['primary'], 
-    #                              font=('Arial', 9), wraplength=450)
-    #     status_label.pack()
-        
-    #     def create():
-    #         """Crée une nouvelle session avec validation"""
-    #         # Réinitialiser le message de statut
-    #         status_label.config(text="", foreground=self.colors['primary'])
-            
-    #         try:
-    #             # Validation des thèmes
-    #             selection = themes_listbox.curselection()
-    #             if not selection:
-    #                 status_label.config(text="❌ Veuillez sélectionner au moins un thème", 
-    #                                   foreground=self.colors['danger'])
-    #                 messagebox.showwarning("Thèmes manquants", "Veuillez sélectionner au moins un thème")
-    #                 return
-                
-    #             theme_ids = []
-    #             for idx in selection:
-    #                 try:
-    #                     theme_ids.append(int(self.themes[idx].get("id")))
-    #                 except (ValueError, IndexError, TypeError):
-    #                     continue
-                
-    #             if not theme_ids:
-    #                 status_label.config(text="❌ Aucun thème valide sélectionné", 
-    #                                   foreground=self.colors['danger'])
-    #                 messagebox.showwarning("Thèmes invalides", "Aucun thème valide sélectionné")
-    #                 return
-                
-    #             # Validation du nom
-    #             name = name_entry.get().strip()
-    #             if not name:
-    #                 status_label.config(text="❌ Veuillez entrer un nom de session", 
-    #                                   foreground=self.colors['danger'])
-    #                 messagebox.showwarning("Erreur", "Veuillez entrer un nom de session")
-    #                 return
-                
-    #             # Validation des valeurs numériques
-    #             try:
-    #                 nb_questions = int(nb_questions_entry.get())
-    #                 if nb_questions < 10 or nb_questions > 50:
-    #                     status_label.config(text="❌ Le nombre de questions doit être entre 10 et 50", 
-    #                                       foreground=self.colors['danger'])
-    #                     messagebox.showwarning("Valeur invalide", "Le nombre de questions doit être entre 10 et 50")
-    #                     return
-    #             except ValueError:
-    #                 status_label.config(text="❌ Nombre de questions invalide", 
-    #                                   foreground=self.colors['danger'])
-    #                 messagebox.showerror("Erreur", "Le nombre de questions doit être un nombre valide")
-    #                 return
-                
-    #             try:
-    #                 time_limit = int(time_limit_entry.get())
-    #                 if time_limit < 10 or time_limit > 60:
-    #                     status_label.config(text="❌ Le temps limite doit être entre 10 et 60 secondes", 
-    #                                       foreground=self.colors['danger'])
-    #                     messagebox.showwarning("Valeur invalide", "Le temps limite doit être entre 10 et 60 secondes")
-    #                     return
-    #             except ValueError:
-    #                 status_label.config(text="❌ Temps limite invalide", 
-    #                                   foreground=self.colors['danger'])
-    #                 messagebox.showerror("Erreur", "Le temps limite doit être un nombre valide")
-    #                 return
-                
-    #             try:
-    #                 max_players = int(max_players_entry.get())
-    #                 if max_players < 2:
-    #                     status_label.config(text="❌ Le nombre maximum de joueurs doit être au moins 2", 
-    #                                       foreground=self.colors['danger'])
-    #                     messagebox.showwarning("Valeur invalide", "Le nombre maximum de joueurs doit être au moins 2")
-    #                     return
-    #             except ValueError:
-    #                 status_label.config(text="❌ Nombre de joueurs invalide", 
-    #                                   foreground=self.colors['danger'])
-    #                 messagebox.showerror("Erreur", "Le nombre maximum de joueurs doit être un nombre valide")
-    #                 return
-                
-    #             # Désactiver le bouton pendant la création
-    #             create_btn.config(state=tk.DISABLED)
-    #             status_label.config(text="⏳ Création de la session en cours...", 
-    #                               foreground=self.colors['primary'])
-                
-    #             def do_create():
-    #                 """Fonction exécutée dans un thread séparé pour créer la session"""
-    #                 try:
-    #                     session_id = self.client.create_session(
-    #                         name, theme_ids, difficulty_var.get(), nb_questions, 
-    #                         time_limit, mode_var.get(), max_players
-    #                     )
-                        
-    #                     if session_id:
-    #                         # Succès - fermer la dialog et afficher la salle d'attente
-    #                         self.root.after(0, lambda: dialog.destroy())
-    #                         self.root.after(0, lambda: status_label.config(text="✅ Session créée avec succès !", 
-    #                                                                       foreground=self.colors['success']if status_label.winfo_exists() else None))
-    #                         self.root.after(0, self.show_waiting_room)
-    #                         # Rafraîchir la liste des sessions
-    #                         self.root.after(0, self.refresh_sessions)
-    #                     else:
-    #                         # Échec - réactiver le bouton et afficher l'erreur détaillée
-    #                         # Récupérer le message d'erreur du serveur
-    #                         error_info = self.client.last_error
-    #                         if error_info:
-    #                             error_statut = error_info.get("statut", "inconnu")
-    #                             error_message = error_info.get("message", "Erreur inconnue")
-    #                             error_action = error_info.get("action", "session/create")
-                                
-    #                             error_msg = f"Erreur {error_statut}: {error_message}"
-                                
-    #                             # Message détaillé pour la boîte de dialogue
-    #                             if error_statut == "404":
-    #                                 detailed_msg = (
-    #                                     f"❌ Route non implémentée sur le serveur\n\n"
-    #                                     f"Le serveur a retourné : {error_statut} - {error_message}\n\n"
-    #                                     f"La route '{error_action}' n'est pas encore implémentée sur le serveur.\n"
-    #                                     f"Il faut ajouter le traitement de cette route dans le code serveur (main.c)."
-    #                                 )
-    #                             else:
-    #                                 detailed_msg = (
-    #                                     f"❌ Erreur lors de la création de session\n\n"
-    #                                     f"Statut: {error_statut}\n"
-    #                                     f"Message: {error_message}\n\n"
-    #                                     f"Vérifiez que :\n"
-    #                                     f"- Le serveur est bien lancé\n"
-    #                                     f"- Vous êtes connecté et authentifié\n"
-    #                                     f"- Les paramètres sont corrects"
-    #                                 )
-    #                         else:
-    #                             error_msg = "Échec de la création de session"
-    #                             detailed_msg = (
-    #                                 "Échec de la création de session.\n\n"
-    #                                 "Vérifiez que :\n"
-    #                                 "- Le serveur est bien lancé\n"
-    #                                 "- Vous êtes connecté et authentifié\n"
-    #                                 "- La route 'session/create' est implémentée sur le serveur"
-    #                             )
-                            
-    #                         self.root.after(0, lambda: create_btn.config(state=tk.NORMAL))
-    #                         self.root.after(0, lambda: status_label.config(
-    #                             text=f"❌ {error_msg}", 
-    #                             foreground=self.colors['danger'])if status_label.winfo_exists() else None)
-    #                         self.root.after(0, lambda msg=detailed_msg: messagebox.showerror("Erreur de création", msg))
-    #                 except Exception as e:
-    #                     # Erreur inattendue
-    #                     error_msg = f"Erreur lors de la création: {str(e)}"
-    #                     self.root.after(0, lambda: create_btn.config(state=tk.NORMAL))
-    #                     self.root.after(0, lambda: status_label.config(
-    #                         text=f"❌ {error_msg}", 
-    #                         foreground=self.colors['danger']))
-    #                     self.root.after(0, lambda: messagebox.showerror("Erreur", error_msg))
-                
-    #             # Lancer la création dans un thread séparé
-    #             threading.Thread(target=do_create, daemon=True).start()
-                
-    #         except Exception as e:
-    #             # Erreur générale
-    #             create_btn.config(state=tk.NORMAL)
-    #             status_label.config(text=f"❌ Erreur: {str(e)}", 
-    #                               foreground=self.colors['danger'])
-    #             messagebox.showerror("Erreur", f"Une erreur est survenue: {str(e)}")
-        
-    #     # Boutons avec style
-    #     button_frame = ttk.Frame(dialog)
-    #     button_frame.grid(row=4, column=0, columnspan=3, pady=(10, 20))
-        
-    #     create_btn = ttk.Button(button_frame, text="✅ Créer la session", command=create, 
-    #                            style='Success.TButton')
-    #     create_btn.pack(side=tk.LEFT, padx=10)
-        
-    #     cancel_btn = ttk.Button(button_frame, text="❌ Annuler", command=dialog.destroy,
-    #                            style='Danger.TButton')
-    #     cancel_btn.pack(side=tk.LEFT, padx=10)
-        
-    #     dialog.columnconfigure(0, weight=1)
-    
+
     def show_create_session_dialog(self):
         """Affiche la boîte de dialogue de création de session"""
         dialog = tk.Toplevel(self.root)
@@ -1122,23 +854,6 @@ class QuizNetGUI:
         
         dialog.columnconfigure(0, weight=1)
     
-
-    # def join_selected_session(self):
-    #     """Rejoint la session sélectionnée"""
-    #     selection = self.sessions_listbox.curselection()
-    #     if not selection:
-    #         messagebox.showwarning("Aucune session sélectionnée", "Veuillez sélectionner une session")
-    #         return
-        
-    #     session = self.sessions[selection[0]]
-        
-    #     def do_join():
-    #         if self.client.join_session(session.get('id')):
-    #             self.root.after(0, self.show_waiting_room)
-    #         else:
-    #             self.root.after(0, lambda: messagebox.showerror("Erreur", "Impossible de rejoindre la session"))
-        
-    #     threading.Thread(target=do_join, daemon=True).start()
     
     def join_selected_session(self):
         """Rejoint la session sélectionnée depuis la liste"""
@@ -1172,11 +887,6 @@ class QuizNetGUI:
         self.waiting_text.delete(1.0, tk.END)
         self.waiting_text.insert(tk.END, "🚪 SALLE D'ATTENTE\n\n")
         
-        # Afficher les jokers disponibles
-        fifty_count = self.client.jokers.get("fifty", 0)
-        skip_count = self.client.jokers.get("skip", 0)
-        self.waiting_text.insert(tk.END, f" Jokers disponibles: 50/50 ({fifty_count}), Passer ({skip_count})\n\n")
-        
         if self.client.is_creator:
             self.waiting_text.insert(tk.END, "👑 Vous êtes le créateur de la session\n")
             self.waiting_text.insert(tk.END, "Appuyez sur 'Démarrer' quand au moins 2 joueurs sont présents\n\n")
@@ -1184,9 +894,6 @@ class QuizNetGUI:
         else:
             self.waiting_text.insert(tk.END, "⏳ En attente que le créateur démarre la session...\n\n")
             self.start_button.config(state=tk.DISABLED)
-        
-        # Mettre à jour l'affichage des jokers
-        self.update_jokers_display()
     
     def start_session(self):
         """Démarre la session"""
@@ -1257,27 +964,18 @@ class QuizNetGUI:
             self.root.after(0, lambda: self.results_text.see(tk.END))
         
         elif action == "joker/use":
-            # Mettre à jour les jokers restants
             self.client.jokers = data.get("jokers", self.client.jokers)
-            
-            # Mettre à jour l'affichage des jokers
-            self.root.after(0, self.update_jokers_display)
-            
             if "remainingAnswers" in data:
-                # Joker 50/50 utilisé - mettre à jour les réponses restantes
                 if self.client.current_question:
                     self.client.current_question["remainingAnswers"] = data["remainingAnswers"]
-                    # Réafficher la question avec seulement les réponses restantes
-                    self.root.after(0, lambda: self.display_question(self.client.current_question))
+                self.root.after(0, lambda: self.display_question(self.client.current_question))
+                # Mettre à jour le bouton 50/50
+                self.root.after(0, lambda: self.fifty_button.config(state=tk.DISABLED))
             else:
-                # Joker Passer utilisé - question sautée
                 self.root.after(0, lambda: messagebox.showinfo("Joker", "Question passée !"))
                 self.answered = True
                 self.client.current_question = None
                 self.root.after(0, lambda: self.submit_button.config(state=tk.DISABLED))
-                # Désactiver les jokers après utilisation
-                self.root.after(0, lambda: self.fifty_button.config(state=tk.DISABLED))
-                self.root.after(0, lambda: self.skip_button.config(state=tk.DISABLED))
     
     def start_game(self):
         """Démarre le jeu"""
@@ -1346,24 +1044,8 @@ class QuizNetGUI:
             answers = question_data.get("answers", [])
             remaining = question_data.get("remainingAnswers", None)
             
-            # Si le joker 50/50 a été utilisé, afficher uniquement les réponses restantes
-            if remaining:
-                # remainingAnswers peut être une liste d'indices (strings) ou de réponses (strings)
-                remaining_indices = []
-                for i, ans in enumerate(answers):
-                    # Vérifier si l'indice (string) ou la réponse est dans remaining
-                    if str(i) in remaining or ans in remaining:
-                        remaining_indices.append(i)
-                
-                # Afficher uniquement les réponses restantes avec leur indice original
-                for idx, i in enumerate(remaining_indices):
-                    rb = ttk.Radiobutton(self.answers_frame, text=answers[i], variable=self.answer_var, 
-                                        value=str(i))  # Garder l'indice original pour l'envoi
-                    rb.grid(row=idx, column=0, sticky=tk.W, pady=2)
-                    self.answer_buttons.append(rb)
-            else:
-                # Afficher toutes les réponses
-                for i, ans in enumerate(answers):
+            for i, ans in enumerate(answers):
+                if not remaining or str(i) in remaining or ans in remaining:
                     rb = ttk.Radiobutton(self.answers_frame, text=ans, variable=self.answer_var, 
                                         value=str(i))
                     rb.grid(row=i, column=0, sticky=tk.W, pady=2)
@@ -1384,23 +1066,15 @@ class QuizNetGUI:
         # Activer les boutons
         self.submit_button.config(state=tk.NORMAL)
         
-        # Mettre à jour l'affichage des jokers
-        self.update_jokers_display()
-        
-        # Gérer les jokers - activer uniquement si disponibles et avant de répondre
-        if not self.answered:
-            if q_type == "qcm" and self.client.jokers.get("fifty", 0) > 0:
-                self.fifty_button.config(state=tk.NORMAL)
-            else:
-                self.fifty_button.config(state=tk.DISABLED)
-            
-            if self.client.jokers.get("skip", 0) > 0:
-                self.skip_button.config(state=tk.NORMAL)
-            else:
-                self.skip_button.config(state=tk.DISABLED)
+        # Gérer les jokers
+        if q_type == "qcm" and self.client.jokers.get("fifty", 0) > 0:
+            self.fifty_button.config(state=tk.NORMAL)
         else:
-            # Désactiver les jokers si on a déjà répondu
             self.fifty_button.config(state=tk.DISABLED)
+        
+        if self.client.jokers.get("skip", 0) > 0:
+            self.skip_button.config(state=tk.NORMAL)
+        else:
             self.skip_button.config(state=tk.DISABLED)
         
         # Démarrer le timer
@@ -1432,43 +1106,18 @@ class QuizNetGUI:
             )
             self.timer_running = False
     
-    def update_jokers_display(self):
-        """Met à jour l'affichage des boutons de jokers avec le nombre restant"""
-        fifty_count = self.client.jokers.get("fifty", 0)
-        skip_count = self.client.jokers.get("skip", 0)
-        
-        self.fifty_button.config(text=f"🎯 50/50 ({fifty_count})")
-        self.skip_button.config(text=f"⏭️ Passer ({skip_count})")
-    
     def use_joker(self, joker_type: str):
         """Utilise un joker"""
-        # Vérifier que le joker est disponible
-        if joker_type == "fifty" and self.client.jokers.get("fifty", 0) <= 0:
-            messagebox.showwarning("Joker indisponible", "Vous n'avez plus de joker 50/50 disponible")
-            return
+        def do_use():
+            self.client.use_joker(joker_type)
         
-        if joker_type == "skip" and self.client.jokers.get("skip", 0) <= 0:
-            messagebox.showwarning("Joker indisponible", "Vous n'avez plus de joker Passer disponible")
-            return
+        threading.Thread(target=do_use, daemon=True).start()
         
-        # Vérifier qu'on n'a pas déjà répondu
-        if self.answered:
-            messagebox.showwarning("Trop tard", "Vous ne pouvez utiliser un joker qu'avant de répondre")
-            return
-        
-        # Désactiver temporairement les boutons pendant l'envoi
         if joker_type == "fifty":
             self.fifty_button.config(state=tk.DISABLED)
         elif joker_type == "skip":
             self.skip_button.config(state=tk.DISABLED)
-        
-        def do_use():
-            success = self.client.use_joker(joker_type)
-            if not success:
-                # Réactiver le bouton en cas d'échec
-                self.root.after(0, self.update_jokers_display)
-        
-        threading.Thread(target=do_use, daemon=True).start()
+            self.answered = True
     
     def submit_answer(self):
         """Envoie la réponse"""
@@ -1511,9 +1160,6 @@ class QuizNetGUI:
         """Marque la question comme répondue"""
         self.answered = True
         self.submit_button.config(state=tk.DISABLED)
-        # Désactiver les jokers après avoir répondu
-        self.fifty_button.config(state=tk.DISABLED)
-        self.skip_button.config(state=tk.DISABLED)
         self.results_text.insert(tk.END, "✓ Réponse envoyée, en attente des résultats...\n")
     
     def display_results(self, results_data: Dict):

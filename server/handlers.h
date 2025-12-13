@@ -11,5 +11,7 @@ void handle_client_request(const char *request, int client_fd, sqlite3 *db);
 void handle_themes_list(int fd, sqlite3 *db);
 void handle_sessions_list(int fd, sqlite3 *db);
 void handle_session_start(int client_fd, sqlite3 *db);
+void handle_question_answer(const char *json, int client_fd, sqlite3 *db);
+void broadcast_to_session(sqlite3 *db, int session_id, const char *message);
 
 #endif

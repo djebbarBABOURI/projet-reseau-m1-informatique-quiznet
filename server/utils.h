@@ -19,5 +19,10 @@ bool append_char(char **buffer, size_t *length, size_t *capacity, char c);
 bool append_json_string(char **buffer, size_t *length, size_t *capacity, const unsigned char *text);
 
 bool ensure_capacity(char **buffer, size_t *capacity, size_t required);
+bool extract_json_raw(const char *json, const char *key, char *out, size_t outSize);
+
+int store_player_answer(sqlite3 *db, int players_session_id, int question_id, const char *player_answer, double response_time);
+char *trim(char *str);  
+bool extract_json_double(const char *json, const char *key, double *out_value);
 
 #endif
