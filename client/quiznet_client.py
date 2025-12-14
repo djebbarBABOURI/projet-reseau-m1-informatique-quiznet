@@ -441,6 +441,20 @@ class QuizNetClient:
             print(f"❌ Erreur de connexion: {message}")
             return False
     
+    def logout(self) -> bool:
+        """Déconnecte un joueur"""
+        response = self._send_request("POST", "player/logout", {})
+
+        if response and response.get("statut") == "200":
+            print(f"✓ Déconnecté avec succès")
+            # Nettoyer l'état du client si nécessaire
+            self.pseudo = None
+            return True
+        else:
+            message = response.get("message", "Erreur inconnue") if response else "Pas de réponse"
+            print(f"❌ Erreur lors de la déconnexion: {message}")
+            return False
+
     # === Thèmes et Sessions ===
     
     def get_themes(self) -> List[Dict]:

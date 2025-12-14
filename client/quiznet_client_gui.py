@@ -249,9 +249,22 @@ class QuizNetGUI:
         title_frame = ttk.Frame(self.main_page_frame)
         title_frame.grid(row=0, column=0, columnspan=2, pady=(0, 15), sticky=(tk.W, tk.E))
         
-        self.main_title = ttk.Label(title_frame, text="🎮 QuizNet", 
-                                    style='Title.TLabel')
-        self.main_title.pack()
+        title_frame.columnconfigure(0, weight=1)
+
+        self.main_title = ttk.Label(
+            title_frame,
+            text="🎮 QuizNet",
+            style='Title.TLabel'
+        )
+        self.main_title.grid(row=0, column=0, sticky=tk.W)
+
+        logout_btn = ttk.Button(
+            title_frame,
+            text="🚪 Déconnexion",
+            command=self.logout,
+            style='Danger.TButton'
+        )
+        logout_btn.grid(row=0, column=1, sticky=tk.E, padx=10)
         
         # Onglets pour thèmes et sessions
         main_notebook = ttk.Notebook(self.main_page_frame)
@@ -456,7 +469,57 @@ class QuizNetGUI:
                 self.root.after(0, lambda: messagebox.showerror("Erreur", "Impossible de se connecter au serveur"))
         
         threading.Thread(target=connect, daemon=True).start()
-    
+
+    def logout(self):
+        """Déconnecte un joueur"""
+        # Confirmation utilisateur
+        if not messagebox.askyesno("Déconnexion", "Voulez-vous vraiment vous déconnecter ?"):
+            return
+
+        def do_logout():
+            if self.client.logout():
+                # Réinitialiser l'état local dans le thread principal
+                def reset_ui():
+                    # Nettoyage de l'état local
+                    if hasattr(self, "selected_theme_ids"):
+                        self.selected_theme_ids.clear()
+
+                    if hasattr(self, "selected_themes_var"):
+                        self.selected_themes_var.set("Aucun thème sélectionné")
+
+                    if hasattr(self, "sessions_listbox"):
+                        self.sessions_listbox.delete(0, tk.END)
+
+                    if hasattr(self, "themes_tree"):
+                        self.themes_tree.delete(*self.themes_tree.get_children())
+
+                    if hasattr(self, "waiting_text"):
+                        self.waiting_text.delete("1.0", tk.END)
+
+                    # Masquer les pages Main et Game
+                    try:
+                        self.notebook.hide(2)  # Menu
+                        self.notebook.hide(3)  # Jeu
+                    except Exception:
+                        pass
+
+                    # Revenir à la page Connexion
+                    try:
+                        self.notebook.add(self.auth_frame, text="Connexion")
+                        self.notebook.select(self.auth_frame)
+                    except Exception:
+                        pass
+
+                    self.current_page = "auth"
+                    messagebox.showinfo("Déconnexion", "Déconnecté avec succès")
+
+                self.root.after(0, reset_ui)
+            else:
+                self.root.after(0, lambda: messagebox.showerror("Erreur", "Échec de la déconnexion"))
+
+        threading.Thread(target=do_logout, daemon=True).start()
+
+
     def register(self):
         """Inscrit un nouveau joueur"""
         pseudo = self.register_pseudo.get()

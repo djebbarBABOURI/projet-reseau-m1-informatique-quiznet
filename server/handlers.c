@@ -292,6 +292,14 @@ void handle_client_request(const char *request, int client_fd, sqlite3 *db)
     }
 
     //--------------------------------------------------------------
+    // POST player/logout
+    //--------------------------------------------------------------
+    if (strcasecmp(method, "POST") == 0 && strcmp(path, "player/logout") == 0) {
+        handle_player_logout(client_fd, db);
+        return;
+    }
+
+    //--------------------------------------------------------------
     // POST joker/use
     //--------------------------------------------------------------
     if (strcasecmp(method, "POST") == 0 && strcmp(path, "joker/use") == 0) {
@@ -304,6 +312,100 @@ void handle_client_request(const char *request, int client_fd, sqlite3 *db)
     }
 
     send_error_response(client_fd, "unknown", "404", "endpoint not implemented");
+}
+
+
+
+SessionList get_current_sessions(int player_id, sqlite3 *db) {
+    SessionList list;
+    list.sessions = NULL;
+    list.count = 0;
+
+    const char *sql =
+        "SELECT s.id "
+        "FROM sessions s "
+        "JOIN players_session ps ON s.id = ps.session_id "
+        "WHERE ps.player_id = ? AND s.status = 'playing';";
+
+    sqlite3_stmt *stmt;
+
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+        fprintf(stderr, "Failed to prepare statement: %s\n", sqlite3_errmsg(db));
+        return list;
+    }
+
+    // Lier le player_id
+    if (sqlite3_bind_int(stmt, 1, player_id) != SQLITE_OK) {
+        fprintf(stderr, "Failed to bind player_id: %s\n", sqlite3_errmsg(db));
+        sqlite3_finalize(stmt);
+        return list;
+    }
+
+    // Parcourir les résultats
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        int session_id = sqlite3_column_int(stmt, 0);
+
+        // Agrandir le tableau
+        int *tmp = realloc(list.sessions, sizeof(int) * (list.count + 1));
+        if (!tmp) {
+            fprintf(stderr, "Memory allocation error\n");
+            free(list.sessions);
+            list.sessions = NULL;
+            list.count = 0;
+            sqlite3_finalize(stmt);
+            return list;
+        }
+
+        list.sessions = tmp;
+        list.sessions[list.count] = session_id;
+        list.count++;
+    }
+
+    sqlite3_finalize(stmt);
+    return list;
+}
+void handle_player_logout(int client_fd, sqlite3 *db)
+{
+    // Récupérer le player_id via le fd
+    int player_id = get_player_id_by_fd(client_fd);
+    if (player_id <= 0) {
+        printf("[WARN] Logout attempted by unauthenticated client (fd=%d)\n", client_fd);
+        send_error_response(client_fd, "player/logout", "401", "Player not authenticated");
+        return;
+    }
+
+    printf("[INFO] Player logout: player_id=%d (fd=%d)\n", player_id, client_fd);
+    print_authenticated_clients();
+
+    // Supprimer le client de la liste des clients authentifiés
+    remove_client(client_fd);
+    print_authenticated_clients();
+
+    // Récupérer toutes les sessions en cours du joueur
+    SessionList sessions = get_current_sessions(player_id, db);
+    if (sessions.count > 0) {
+        // Construire le message JSON
+        char notify[256];
+        snprintf(notify, sizeof(notify),
+            "{\"action\":\"session/player/left\",\"playerId\":%d}", player_id);
+
+        // Boucler sur toutes les sessions et notifier les autres joueurs
+        for (int i = 0; i < sessions.count; i++) {
+            int session_id = sessions.sessions[i];
+            broadcast_to_session(db, session_id, notify); // exclut le joueur qui quitte
+        }
+
+        // Libérer le tableau dynamique
+        free(sessions.sessions);
+    }
+
+    // Réponse au client qui se déconnecte
+    const char *resp =
+        "{\"action\":\"player/logout\",\"statut\":\"200\",\"message\":\"logout successful\"}";
+    send(client_fd, resp, strlen(resp), 0);
+
+    // Fermer la connexion socket
+    close(client_fd);
 }
 
 void handle_question_answer(const char *json, int client_fd, sqlite3 *db)
