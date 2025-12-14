@@ -883,6 +883,8 @@ void send_question_results(int session_id, sqlite3 *db)
             }
             // CAS 2: Certains ont répondu normalement
             else {
+                bool is_last_player = (last_player_pseudo && strcmp(results[i].pseudo, last_player_pseudo) == 0);
+                
                 // Si ce joueur n'a pas répondu (timeout) → perd 1 vie
                 if (is_timeout) {
                     lives_lost++;
@@ -893,14 +895,12 @@ void send_question_results(int session_id, sqlite3 *db)
                     lives_lost++;
                     printf("DEBUG send_question_results BATTLE: %s perd 1 vie (réponse incorrecte)\n", results[i].pseudo);
                 }
-                // Si ce joueur a répondu correctement, il ne perd pas de vie SAUF s'il est le dernier
-                
-                // Si ce joueur est le dernier à avoir répondu normalement → perd 1 vie (même si réponse correcte)
-                // Note: si le joueur est le dernier ET a répondu incorrectement, il perd 2 vies au total
-                if (last_player_pseudo && strcmp(results[i].pseudo, last_player_pseudo) == 0) {
+                // Si ce joueur a répondu correctement mais est le dernier → perd 1 vie
+                else if (has_answered_normal && results[i].correct && is_last_player) {
                     lives_lost++;
-                    printf("DEBUG send_question_results BATTLE: %s perd 1 vie (dernier à répondre)\n", results[i].pseudo);
+                    printf("DEBUG send_question_results BATTLE: %s perd 1 vie (dernier à répondre, réponse correcte)\n", results[i].pseudo);
                 }
+                // Note: Si le joueur répond incorrectement ET est le dernier, il ne perd qu'1 vie (déjà compté dans le else if ci-dessus)
             }
             
             // Décrémenter les vies dans la DB

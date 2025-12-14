@@ -1242,43 +1242,193 @@ class QuizNetGUI:
         self.answered = False
     
     def display_final_results(self, results_data: Dict):
-        """Affiche les résultats finaux"""
-        self.results_text.delete(1.0, tk.END)
-        self.results_text.insert(tk.END, "🎉 FIN DE LA SESSION\n")
-        self.results_text.insert(tk.END, "="*50 + "\n\n")
+        """Affiche les résultats finaux dans une fenêtre dédiée"""
+        # Créer une nouvelle fenêtre pour les résultats
+        results_window = tk.Toplevel(self.root)
+        results_window.title("🏆 Résultats Finaux - QuizNet")
+        results_window.geometry("900x750")
+        results_window.resizable(True, True)
+        results_window.configure(bg=self.colors['bg'])
+        
+        # Centrer la fenêtre
+        results_window.update_idletasks()
+        x = (results_window.winfo_screenwidth() // 2) - (results_window.winfo_width() // 2)
+        y = (results_window.winfo_screenheight() // 2) - (results_window.winfo_height() // 2)
+        results_window.geometry(f"+{x}+{y}")
+        
+        # Container principal avec padding
+        main_container = ttk.Frame(results_window, padding="20")
+        main_container.pack(fill=tk.BOTH, expand=True)
+        
+        # En-tête avec titre
+        header_frame = ttk.Frame(main_container)
+        header_frame.pack(fill=tk.X, pady=(0, 20))
+        
+        title_label = tk.Label(header_frame, 
+                              text="🎉 FIN DE LA SESSION 🎉",
+                              font=('Arial', 24, 'bold'),
+                              bg=self.colors['bg'],
+                              fg=self.colors['primary'])
+        title_label.pack()
         
         mode = results_data.get("mode", "")
         ranking = results_data.get("ranking", [])
         
+        # Section Vainqueur (mode Battle uniquement)
         if mode == "battle":
             winner = results_data.get("winner", "")
-            self.results_text.insert(tk.END, f"🏆 VAINQUEUR: {winner}\n\n")
+            winner_frame = ttk.LabelFrame(main_container, text="🏆 Vainqueur", padding="15")
+            winner_frame.pack(fill=tk.X, pady=(0, 20))
+            
+            winner_label = tk.Label(winner_frame,
+                                   text=f"👑 {winner} 👑",
+                                   font=('Arial', 20, 'bold'),
+                                   bg=self.colors['light'],
+                                   fg=self.colors['success'],
+                                   pady=10)
+            winner_label.pack()
         
-        self.results_text.insert(tk.END, "📊 Classement final:\n")
-        self.results_text.insert(tk.END, "-"*50 + "\n")
+        # Section Classement
+        ranking_frame = ttk.LabelFrame(main_container, text="📊 Classement Final", padding="15")
+        ranking_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 20))
         
-        for result in ranking:
-            rank = result.get("rank", 0)
+        # Créer un canvas avec scrollbar pour le classement
+        canvas_container = ttk.Frame(ranking_frame)
+        canvas_container.pack(fill=tk.BOTH, expand=True)
+        
+        canvas = tk.Canvas(canvas_container, bg=self.colors['light'], highlightthickness=0)
+        scrollbar = ttk.Scrollbar(canvas_container, orient="vertical", command=canvas.yview)
+        scrollable_frame = ttk.Frame(canvas)
+        
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+        
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        # Couleurs pour les podiums
+        podium_colors = {
+            1: {'bg': '#FFD700', 'fg': '#000000', 'emoji': '🥇'},  # Or
+            2: {'bg': '#C0C0C0', 'fg': '#000000', 'emoji': '🥈'},  # Argent
+            3: {'bg': '#CD7F32', 'fg': '#FFFFFF', 'emoji': '🥉'},  # Bronze
+        }
+        
+        # Afficher chaque joueur du classement
+        for idx, result in enumerate(ranking, 1):
+            rank = result.get("rank", idx)
             pseudo = result.get("pseudo", "")
             score = result.get("score", 0)
             correct = result.get("correctAnswers", 0)
+            
+            # Frame pour chaque joueur
+            player_frame = ttk.Frame(scrollable_frame, padding="10")
+            player_frame.pack(fill=tk.X, pady=5, padx=5)
+            
+            # Couleur selon le rang
+            if rank <= 3:
+                color_info = podium_colors[rank]
+                player_frame.configure(style='Podium.TFrame')
+                bg_color = color_info['bg']
+                fg_color = color_info['fg']
+                emoji = color_info['emoji']
+            else:
+                bg_color = self.colors['bg']
+                fg_color = self.colors['fg']
+                emoji = f"{rank}."
+            
+            # Container pour le joueur avec couleur de fond
+            player_container = tk.Frame(player_frame, bg=bg_color, relief=tk.RAISED, bd=2)
+            player_container.pack(fill=tk.X, padx=5, pady=2)
+            
+            # Rang et pseudo
+            rank_frame = ttk.Frame(player_container)
+            rank_frame.pack(fill=tk.X, padx=15, pady=10)
+            
+            rank_label = tk.Label(rank_frame,
+                                 text=f"{emoji} {pseudo}",
+                                 font=('Arial', 16, 'bold'),
+                                 bg=bg_color,
+                                 fg=fg_color)
+            rank_label.pack(side=tk.LEFT)
+            
+            # Informations du joueur
+            info_frame = ttk.Frame(player_container)
+            info_frame.pack(fill=tk.X, padx=15, pady=(0, 10))
             
             if mode == "battle":
                 lives = result.get("lives", 0)
                 eliminated = result.get("eliminatedAt", None)
                 hearts = "❤️" * lives + "🤍" * (4 - lives) if lives > 0 else "💀"
+                
+                # Vies
+                lives_label = tk.Label(info_frame,
+                                      text=f"Vies: {hearts} ({lives}/4)",
+                                      font=('Arial', 12),
+                                      bg=bg_color,
+                                      fg=fg_color)
+                lives_label.pack(side=tk.LEFT, padx=10)
+                
+                # Score
+                score_label = tk.Label(info_frame,
+                                      text=f"Score: {score}",
+                                      font=('Arial', 12, 'bold'),
+                                      bg=bg_color,
+                                      fg=fg_color)
+                score_label.pack(side=tk.LEFT, padx=10)
+                
+                # Réponses correctes
+                correct_label = tk.Label(info_frame,
+                                        text=f"Réponses: {correct}",
+                                        font=('Arial', 12),
+                                        bg=bg_color,
+                                        fg=fg_color)
+                correct_label.pack(side=tk.LEFT, padx=10)
+                
+                # Élimination
                 if eliminated:
-                    self.results_text.insert(tk.END, 
-                        f"{rank}. {pseudo} - Vies: {hearts} ({lives}/4) - Score: {score} - Réponses: {correct} (Éliminé Q{eliminated})\n")
-                else:
-                    self.results_text.insert(tk.END, 
-                        f"{rank}. {pseudo} - Vies: {hearts} ({lives}/4) - Score: {score} - Réponses: {correct}\n")
+                    elim_label = tk.Label(info_frame,
+                                         text=f"Éliminé à la question {eliminated}",
+                                         font=('Arial', 11, 'italic'),
+                                         bg=bg_color,
+                                         fg=self.colors['danger'])
+                    elim_label.pack(side=tk.LEFT, padx=10)
             else:
-                self.results_text.insert(tk.END, 
-                    f"{rank}. {pseudo} - Score: {score} - Réponses correctes: {correct}\n")
+                # Mode Solo
+                score_label = tk.Label(info_frame,
+                                      text=f"Score: {score}",
+                                      font=('Arial', 14, 'bold'),
+                                      bg=bg_color,
+                                      fg=fg_color)
+                score_label.pack(side=tk.LEFT, padx=10)
+                
+                correct_label = tk.Label(info_frame,
+                                        text=f"Réponses correctes: {correct}",
+                                        font=('Arial', 12),
+                                        bg=bg_color,
+                                        fg=fg_color)
+                correct_label.pack(side=tk.LEFT, padx=10)
         
-        messagebox.showinfo("Fin de session", "La session est terminée !")
-        self.notebook.select(2)  # Retour au menu principal
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        
+        # Bouton de fermeture
+        button_frame = ttk.Frame(main_container)
+        button_frame.pack(fill=tk.X, pady=(10, 0))
+        
+        close_button = ttk.Button(button_frame,
+                                 text="✅ Retour au menu principal",
+                                 command=lambda: [results_window.destroy(), self.notebook.select(2)])
+        close_button.pack(pady=10)
+        
+        # Configurer le scroll avec la souris
+        def _on_mousewheel(event):
+            canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        
+        # Message d'information
+        messagebox.showinfo("Fin de session", "La session est terminée ! Consultez les résultats ci-dessous.")
 
 
 def main():
