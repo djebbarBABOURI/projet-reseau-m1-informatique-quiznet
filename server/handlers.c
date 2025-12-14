@@ -812,25 +812,24 @@ void send_question_results(int session_id, sqlite3 *db)
 
     // ===== LOGIQUE MODE BATTLE =====
     if (is_battle) {
-        // Compter combien de joueurs ont répondu (answer != "-1" OU joker Passer)
-        // Note: "-1" avec has_answer=true = joker Passer (compte comme "répondu" pour le calcul du lastPlayer)
-        // Note: "-1" avec has_answer=false = timeout (ne compte pas comme "répondu")
-        int players_answered = 0;
+        // Compter combien de joueurs ont vraiment répondu (pas de timeout, pas de joker Passer)
+        // On compte seulement les réponses normales (answer != "-1")
+        int players_answered_normal = 0;
         for (int i = 0; i < count; i++) {
-            if (strcmp(results[i].answer, "-1") != 0 || results[i].has_answer) {
-                // Réponse normale OU joker Passer
-                players_answered++;
+            if (strcmp(results[i].answer, "-1") != 0) {
+                // Réponse normale (pas timeout, pas joker Passer)
+                players_answered_normal++;
             }
         }
         
-        // Trouver le lastPlayer (dernier à avoir répondu) - seulement si au moins un joueur a répondu
+        // Trouver le lastPlayer (dernier à avoir répondu normalement) - seulement si au moins un joueur a répondu
         const char *last_player_pseudo = NULL;
-        if (players_answered > 0) {
+        if (players_answered_normal > 0) {
             last_player_pseudo = compute_last_player(results, count);
         }
         
-        printf("DEBUG send_question_results BATTLE: players_answered=%d/%d, lastPlayer=%s, current_question=%d\n", 
-               players_answered, count, last_player_pseudo ? last_player_pseudo : "NULL", current_question_num);
+        printf("DEBUG send_question_results BATTLE: players_answered_normal=%d/%d, lastPlayer=%s, current_question=%d\n", 
+               players_answered_normal, count, last_player_pseudo ? last_player_pseudo : "NULL", current_question_num);
         
         // Pour chaque joueur, décrémenter les vies si nécessaire
         for (int i = 0; i < count; i++) {
@@ -858,10 +857,11 @@ void send_question_results(int session_id, sqlite3 *db)
             
             int lives_lost = 0;
             bool was_eliminated = (results[i].lives == 0);
-            bool has_answered = (strcmp(results[i].answer, "-1") != 0);
+            bool has_answered_normal = (strcmp(results[i].answer, "-1") != 0);
             // IMPORTANT: Si answer = "-1" ET has_answer = true, c'est le joker Passer (pas de perte de vie)
             // Si answer = "-1" ET has_answer = false, c'est un timeout (perte de vie)
             bool used_skip_joker = (strcmp(results[i].answer, "-1") == 0 && results[i].has_answer);
+            bool is_timeout = (strcmp(results[i].answer, "-1") == 0 && !results[i].has_answer);
             
             // IMPORTANT: Si le joueur a utilisé le joker Passer, il ne perd AUCUNE vie
             if (used_skip_joker) {
@@ -869,25 +869,33 @@ void send_question_results(int session_id, sqlite3 *db)
                 continue; // Passer au joueur suivant sans décrémenter les vies
             }
             
-            // CAS 1: Personne n'a répondu → tous perdent 1 vie
-            if (players_answered == 0) {
-                lives_lost++;
-                printf("DEBUG send_question_results BATTLE: %s perd 1 vie (personne n'a répondu)\n", results[i].pseudo);
-            }
-            // CAS 2: Certains ont répondu
-            else {
-                // Si ce joueur n'a pas répondu → perd 1 vie
-                if (!has_answered) {
+            // CAS 1: Personne n'a répondu normalement (tous timeout ou joker Passer)
+            // Dans ce cas, tous ceux qui ont timeout perdent 1 vie
+            // Ceux qui ont utilisé le joker Passer ne perdent pas de vie (déjà géré avec le continue)
+            if (players_answered_normal == 0) {
+                // Seulement ceux qui ont timeout perdent 1 vie
+                if (is_timeout) {
                     lives_lost++;
-                    printf("DEBUG send_question_results BATTLE: %s perd 1 vie (n'a pas répondu)\n", results[i].pseudo);
+                    printf("DEBUG send_question_results BATTLE: %s perd 1 vie (timeout, personne n'a répondu)\n", results[i].pseudo);
+                }
+                // Si le joueur a répondu correctement mais qu'on est dans le CAS 1, c'est étrange
+                // Mais on ne fait rien (pas de perte de vie pour une bonne réponse)
+            }
+            // CAS 2: Certains ont répondu normalement
+            else {
+                // Si ce joueur n'a pas répondu (timeout) → perd 1 vie
+                if (is_timeout) {
+                    lives_lost++;
+                    printf("DEBUG send_question_results BATTLE: %s perd 1 vie (timeout)\n", results[i].pseudo);
                 }
                 // Si ce joueur a répondu incorrectement → perd 1 vie
-                else if (!results[i].correct) {
+                else if (has_answered_normal && !results[i].correct) {
                     lives_lost++;
                     printf("DEBUG send_question_results BATTLE: %s perd 1 vie (réponse incorrecte)\n", results[i].pseudo);
                 }
+                // Si ce joueur a répondu correctement, il ne perd pas de vie SAUF s'il est le dernier
                 
-                // Si ce joueur est le dernier à avoir répondu → perd 1 vie (même si réponse correcte)
+                // Si ce joueur est le dernier à avoir répondu normalement → perd 1 vie (même si réponse correcte)
                 // Note: si le joueur est le dernier ET a répondu incorrectement, il perd 2 vies au total
                 if (last_player_pseudo && strcmp(results[i].pseudo, last_player_pseudo) == 0) {
                     lives_lost++;
