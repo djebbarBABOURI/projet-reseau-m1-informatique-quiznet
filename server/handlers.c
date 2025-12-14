@@ -10,9 +10,13 @@
 #include <sys/socket.h>
 #include <unistd.h>
 #include <pthread.h>
+#include <time.h>
 #include "db_utils.h"
 #include "utils.h"
 #include "clients.h"
+
+// Déclarations forward
+void handle_joker_use(const char *json, int client_fd, sqlite3 *db);
 //
 bool request_is_complete(const char *buffer)
 {
@@ -287,6 +291,18 @@ void handle_client_request(const char *request, int client_fd, sqlite3 *db)
         return;
     }
 
+    //--------------------------------------------------------------
+    // POST joker/use
+    //--------------------------------------------------------------
+    if (strcasecmp(method, "POST") == 0 && strcmp(path, "joker/use") == 0) {
+        if (!json) {
+            send_error_response(client_fd, "joker/use", "400", "Missing JSON body");
+            return;
+        }
+        handle_joker_use(json, client_fd, db);
+        return;
+    }
+
     send_error_response(client_fd, "unknown", "404", "endpoint not implemented");
 }
 
@@ -371,6 +387,298 @@ void handle_question_answer(const char *json, int client_fd, sqlite3 *db)
     } else {
         printf("[INFO] Response sent to player_id=%d (%zd bytes)\n", player_id, sent);
     }
+}
+
+// Gère l'utilisation d'un joker
+void handle_joker_use(const char *json, int client_fd, sqlite3 *db)
+{
+    // Récupération de l'ID du joueur
+    int player_id = get_player_id_by_fd(client_fd);
+    if (player_id <= 0) {
+        printf("[WARN] Unauthenticated player tried to use joker (fd=%d)\n", client_fd);
+        send_error_response(client_fd, "joker/use", "401", "Player not authenticated");
+        return;
+    }
+    
+    // Extraire le type de joker
+    char joker_type[32] = {0};
+    if (!extract_json_string(json, "type", joker_type, sizeof(joker_type))) {
+        send_error_response(client_fd, "joker/use", "400", "Missing joker type");
+        return;
+    }
+    
+    printf("[INFO] Player %d wants to use joker: %s\n", player_id, joker_type);
+    
+    // Récupérer players_session_id pour ce joueur dans la session active
+    int players_session_id = -1;
+    int session_id = -1;
+    sqlite3_stmt *stmt;
+    const char *sql = 
+        "SELECT ps.id, ps.session_id "
+        "FROM players_session ps "
+        "JOIN sessions s ON ps.session_id = s.id "
+        "WHERE ps.player_id = ? AND s.status = 'playing' "
+        "ORDER BY s.id DESC LIMIT 1;";
+    
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+        sqlite3_bind_int(stmt, 1, player_id);
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            players_session_id = sqlite3_column_int(stmt, 0);
+            session_id = sqlite3_column_int(stmt, 1);
+        }
+    }
+    sqlite3_finalize(stmt);
+    
+    if (players_session_id <= 0) {
+        printf("[WARN] No active session found for player_id=%d\n", player_id);
+        send_error_response(client_fd, "joker/use", "404", "No active session found");
+        return;
+    }
+    
+    // Vérifier que les jokers sont disponibles
+    int fifty_available = 0;
+    int skip_available = 0;
+    const char *sql_jokers = "SELECT fifty, skip FROM jokers WHERE players_session_id = ?";
+    if (sqlite3_prepare_v2(db, sql_jokers, -1, &stmt, NULL) == SQLITE_OK) {
+        sqlite3_bind_int(stmt, 1, players_session_id);
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            fifty_available = sqlite3_column_int(stmt, 0);
+            skip_available = sqlite3_column_int(stmt, 1);
+        }
+    }
+    sqlite3_finalize(stmt);
+    
+    // Vérifier que le joker demandé est disponible
+    if (strcmp(joker_type, "fifty") == 0) {
+        if (fifty_available <= 0) {
+            send_error_response(client_fd, "joker/use", "400", "Joker 50/50 not available");
+            return;
+        }
+    } else if (strcmp(joker_type, "skip") == 0) {
+        if (skip_available <= 0) {
+            send_error_response(client_fd, "joker/use", "400", "Joker Passer not available");
+            return;
+        }
+    } else {
+        send_error_response(client_fd, "joker/use", "400", "Invalid joker type");
+        return;
+    }
+    
+    // Récupérer la question actuelle
+    int question_id = get_current_question_id(player_id, db);
+    if (question_id <= 0) {
+        send_error_response(client_fd, "joker/use", "404", "No active question found");
+        return;
+    }
+    
+    // Récupérer le type de la question
+    char question_type[32] = {0};
+    const char *sql_question = "SELECT type, answers FROM questions WHERE id = ?";
+    char answers_json[1024] = {0};
+    if (sqlite3_prepare_v2(db, sql_question, -1, &stmt, NULL) == SQLITE_OK) {
+        sqlite3_bind_int(stmt, 1, question_id);
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            const unsigned char *type = sqlite3_column_text(stmt, 0);
+            const unsigned char *answers = sqlite3_column_text(stmt, 1);
+            if (type) strncpy(question_type, (const char *)type, sizeof(question_type) - 1);
+            if (answers) strncpy(answers_json, (const char *)answers, sizeof(answers_json) - 1);
+        }
+    }
+    sqlite3_finalize(stmt);
+    
+    // Traiter le joker 50/50
+    if (strcmp(joker_type, "fifty") == 0) {
+        // Vérifier que c'est une question QCM
+        if (strcmp(question_type, "qcm") != 0) {
+            send_error_response(client_fd, "joker/use", "400", "Joker 50/50 can only be used on QCM questions");
+            return;
+        }
+        
+        // Trouver les positions des bonnes réponses
+        int correct_positions[10];
+        int nb_correct = get_correct_answer_positions(db, question_id, correct_positions, 10);
+        
+        if (nb_correct <= 0) {
+            send_error_response(client_fd, "joker/use", "500", "Error finding correct answers");
+            return;
+        }
+        
+        // Parser les réponses (format JSON array)
+        // Exemple: ["Réponse A", "Réponse B", "Réponse C", "Réponse D"]
+        char answers_clean[1024] = {0};
+        int j = 0;
+        for (int i = 0; answers_json[i] && j < sizeof(answers_clean) - 1; i++) {
+            if (answers_json[i] != '[' && answers_json[i] != ']' && answers_json[i] != '"') {
+                answers_clean[j++] = answers_json[i];
+            }
+        }
+        
+        // Extraire les réponses individuelles
+        char *answers_list[4];
+        int answers_count = 0;
+        char *token = strtok(answers_clean, ",");
+        while (token && answers_count < 4) {
+            // Nettoyer les espaces
+            while (*token == ' ') token++;
+            char *end = token + strlen(token) - 1;
+            while (end > token && *end == ' ') *end-- = '\0';
+            answers_list[answers_count++] = strdup(token);
+            token = strtok(NULL, ",");
+        }
+        
+        // Trouver les mauvaises réponses (celles qui ne sont pas dans correct_positions)
+        int wrong_positions[4];
+        int wrong_count = 0;
+        for (int i = 0; i < answers_count; i++) {
+            bool is_correct = false;
+            for (int j = 0; j < nb_correct; j++) {
+                if (i == correct_positions[j]) {
+                    is_correct = true;
+                    break;
+                }
+            }
+            if (!is_correct) {
+                wrong_positions[wrong_count++] = i;
+            }
+        }
+        
+        // Éliminer 2 mauvaises réponses aléatoirement
+        if (wrong_count >= 2) {
+            // Mélanger les positions des mauvaises réponses
+            for (int i = wrong_count - 1; i > 0; i--) {
+                int j = rand() % (i + 1);
+                int temp = wrong_positions[i];
+                wrong_positions[i] = wrong_positions[j];
+                wrong_positions[j] = temp;
+            }
+            // Garder seulement les 2 premières (qui seront éliminées)
+            wrong_count = 2;
+        }
+        
+        // Construire la liste des réponses restantes
+        bool keep_answer[4] = {true, true, true, true};
+        for (int i = 0; i < wrong_count; i++) {
+            keep_answer[wrong_positions[i]] = false;
+        }
+        
+        // Construire le JSON des réponses restantes
+        size_t capacity = 512;
+        size_t length = 0;
+        char *remaining_json = malloc(capacity);
+        if (!remaining_json) {
+            send_error_response(client_fd, "joker/use", "500", "Memory error");
+            return;
+        }
+        remaining_json[0] = '\0';
+        
+        append_str(&remaining_json, &length, &capacity, "[");
+        bool first = true;
+        for (int i = 0; i < answers_count; i++) {
+            if (keep_answer[i]) {
+                if (!first) append_str(&remaining_json, &length, &capacity, ",");
+                first = false;
+                append_str(&remaining_json, &length, &capacity, "\"");
+                append_str(&remaining_json, &length, &capacity, answers_list[i]);
+                append_str(&remaining_json, &length, &capacity, "\"");
+            }
+        }
+        append_str(&remaining_json, &length, &capacity, "]");
+        
+        // Libérer les réponses
+        for (int i = 0; i < answers_count; i++) {
+            free(answers_list[i]);
+        }
+        
+        // Mettre à jour les jokers dans la DB
+        const char *sql_update = "UPDATE jokers SET fifty = ? WHERE players_session_id = ?";
+        if (sqlite3_prepare_v2(db, sql_update, -1, &stmt, NULL) == SQLITE_OK) {
+            sqlite3_bind_int(stmt, 1, fifty_available - 1);
+            sqlite3_bind_int(stmt, 2, players_session_id);
+            sqlite3_step(stmt);
+        }
+        sqlite3_finalize(stmt);
+        
+        // Envoyer la réponse
+        size_t resp_capacity = 1024;
+        size_t resp_length = 0;
+        char *response = malloc(resp_capacity);
+        if (!response) {
+            free(remaining_json);
+            send_error_response(client_fd, "joker/use", "500", "Memory error");
+            return;
+        }
+        response[0] = '\0';
+        
+        append_str(&response, &resp_length, &resp_capacity, "{\"action\":\"joker/use\",\"statut\":\"200\",\"message\":\"joker activated\",\"remainingAnswers\":");
+        append_str(&response, &resp_length, &resp_capacity, remaining_json);
+        append_str(&response, &resp_length, &resp_capacity, ",\"jokers\":{\"fifty\":");
+        char fifty_buf[32];
+        snprintf(fifty_buf, sizeof(fifty_buf), "%d", fifty_available - 1);
+        append_str(&response, &resp_length, &resp_capacity, fifty_buf);
+        append_str(&response, &resp_length, &resp_capacity, ",\"skip\":");
+        char skip_buf[32];
+        snprintf(skip_buf, sizeof(skip_buf), "%d", skip_available);
+        append_str(&response, &resp_length, &resp_capacity, skip_buf);
+        append_str(&response, &resp_length, &resp_capacity, "}}");
+        
+        send(client_fd, response, resp_length, 0);
+        free(remaining_json);
+        free(response);
+        
+        printf("[INFO] Joker 50/50 utilisé par player_id=%d, réponses restantes envoyées\n", player_id);
+        return;
+    }
+    
+    // Traiter le joker Passer
+    if (strcmp(joker_type, "skip") == 0) {
+        // Marquer la question comme passée (réponse spéciale "-1" pour indiquer "passé")
+        // Le joueur ne perdra pas de vie en mode Battle grâce à cette réponse spéciale
+        const char *answer_skip = "-1";
+        double response_time = 0.0; // Temps de réponse = 0 car passé immédiatement
+        
+        // Stocker la réponse "passée" dans la DB
+        int store_result = store_player_answer(db, players_session_id, question_id, answer_skip, response_time);
+        if (store_result != 0) {
+            printf("[WARN] Failed to store skip answer for players_session_id=%d\n", players_session_id);
+        }
+        
+        // Mettre à jour les jokers dans la DB
+        const char *sql_update = "UPDATE jokers SET skip = ? WHERE players_session_id = ?";
+        if (sqlite3_prepare_v2(db, sql_update, -1, &stmt, NULL) == SQLITE_OK) {
+            sqlite3_bind_int(stmt, 1, skip_available - 1);
+            sqlite3_bind_int(stmt, 2, players_session_id);
+            sqlite3_step(stmt);
+        }
+        sqlite3_finalize(stmt);
+        
+        // Envoyer la réponse
+        size_t resp_capacity = 512;
+        size_t resp_length = 0;
+        char *response = malloc(resp_capacity);
+        if (!response) {
+            send_error_response(client_fd, "joker/use", "500", "Memory error");
+            return;
+        }
+        response[0] = '\0';
+        
+        append_str(&response, &resp_length, &resp_capacity, "{\"action\":\"joker/use\",\"statut\":\"200\",\"message\":\"question skipped\",\"jokers\":{\"fifty\":");
+        char fifty_buf[32];
+        snprintf(fifty_buf, sizeof(fifty_buf), "%d", fifty_available);
+        append_str(&response, &resp_length, &resp_capacity, fifty_buf);
+        append_str(&response, &resp_length, &resp_capacity, ",\"skip\":");
+        char skip_buf[32];
+        snprintf(skip_buf, sizeof(skip_buf), "%d", skip_available - 1);
+        append_str(&response, &resp_length, &resp_capacity, skip_buf);
+        append_str(&response, &resp_length, &resp_capacity, "}}");
+        
+        send(client_fd, response, resp_length, 0);
+        free(response);
+        
+        printf("[INFO] Joker Passer utilisé par player_id=%d, question passée (pas de perte de vie en mode Battle)\n", player_id);
+        return;
+    }
+    
+    send_error_response(client_fd, "joker/use", "400", "Invalid joker type");
 }
 // void handle_question_answer(const char *json, int client_fd, sqlite3 *db)
 // {
@@ -472,16 +780,21 @@ void handle_question_answer(const char *json, int client_fd, sqlite3 *db)
 //     send(client_fd, resp, strlen(resp), 0);
 // }
 
+// Déclaration forward
+void send_player_eliminated(sqlite3 *db, int session_id, const char *pseudo);
+
 void send_question_results(int session_id, sqlite3 *db)
 {
-    // Récupérer le max_players depuis la table sessions
+    // Récupérer le max_players et current_question depuis la table sessions
     int max_players = 0;
+    int current_question_num = 0;
     sqlite3_stmt *stmt;
-    const char *sql = "SELECT max_players FROM sessions WHERE id = ?";
+    const char *sql = "SELECT max_players, current_question FROM sessions WHERE id = ?";
     if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
         sqlite3_bind_int(stmt, 1, session_id);
         if (sqlite3_step(stmt) == SQLITE_ROW) {
             max_players = sqlite3_column_int(stmt, 0);
+            current_question_num = sqlite3_column_int(stmt, 1);
         }
     }
     sqlite3_finalize(stmt);
@@ -497,12 +810,148 @@ void send_question_results(int session_id, sqlite3 *db)
 
     bool is_battle = session_is_battle(db, session_id);
 
+    // ===== LOGIQUE MODE BATTLE =====
+    if (is_battle) {
+        // Compter combien de joueurs ont répondu (answer != "-1" OU joker Passer)
+        // Note: "-1" avec has_answer=true = joker Passer (compte comme "répondu" pour le calcul du lastPlayer)
+        // Note: "-1" avec has_answer=false = timeout (ne compte pas comme "répondu")
+        int players_answered = 0;
+        for (int i = 0; i < count; i++) {
+            if (strcmp(results[i].answer, "-1") != 0 || results[i].has_answer) {
+                // Réponse normale OU joker Passer
+                players_answered++;
+            }
+        }
+        
+        // Trouver le lastPlayer (dernier à avoir répondu) - seulement si au moins un joueur a répondu
+        const char *last_player_pseudo = NULL;
+        if (players_answered > 0) {
+            last_player_pseudo = compute_last_player(results, count);
+        }
+        
+        printf("DEBUG send_question_results BATTLE: players_answered=%d/%d, lastPlayer=%s, current_question=%d\n", 
+               players_answered, count, last_player_pseudo ? last_player_pseudo : "NULL", current_question_num);
+        
+        // Pour chaque joueur, décrémenter les vies si nécessaire
+        for (int i = 0; i < count; i++) {
+            // Récupérer le players_session_id pour ce joueur
+            const char *sql_ps = 
+                "SELECT ps.id FROM players_session ps "
+                "JOIN players p ON p.id = ps.player_id "
+                "WHERE ps.session_id = ? AND p.pseudo = ?";
+            sqlite3_stmt *stmt_ps;
+            int players_session_id = -1;
+            
+            if (sqlite3_prepare_v2(db, sql_ps, -1, &stmt_ps, NULL) == SQLITE_OK) {
+                sqlite3_bind_int(stmt_ps, 1, session_id);
+                sqlite3_bind_text(stmt_ps, 2, results[i].pseudo, -1, SQLITE_STATIC);
+                if (sqlite3_step(stmt_ps) == SQLITE_ROW) {
+                    players_session_id = sqlite3_column_int(stmt_ps, 0);
+                }
+            }
+            sqlite3_finalize(stmt_ps);
+            
+            if (players_session_id <= 0) {
+                printf("DEBUG send_question_results BATTLE: joueur %s non trouvé\n", results[i].pseudo);
+                continue;
+            }
+            
+            int lives_lost = 0;
+            bool was_eliminated = (results[i].lives == 0);
+            bool has_answered = (strcmp(results[i].answer, "-1") != 0);
+            // IMPORTANT: Si answer = "-1" ET has_answer = true, c'est le joker Passer (pas de perte de vie)
+            // Si answer = "-1" ET has_answer = false, c'est un timeout (perte de vie)
+            bool used_skip_joker = (strcmp(results[i].answer, "-1") == 0 && results[i].has_answer);
+            
+            // IMPORTANT: Si le joueur a utilisé le joker Passer, il ne perd AUCUNE vie
+            if (used_skip_joker) {
+                printf("DEBUG send_question_results BATTLE: %s a utilisé le joker Passer, aucune perte de vie\n", results[i].pseudo);
+                continue; // Passer au joueur suivant sans décrémenter les vies
+            }
+            
+            // CAS 1: Personne n'a répondu → tous perdent 1 vie
+            if (players_answered == 0) {
+                lives_lost++;
+                printf("DEBUG send_question_results BATTLE: %s perd 1 vie (personne n'a répondu)\n", results[i].pseudo);
+            }
+            // CAS 2: Certains ont répondu
+            else {
+                // Si ce joueur n'a pas répondu → perd 1 vie
+                if (!has_answered) {
+                    lives_lost++;
+                    printf("DEBUG send_question_results BATTLE: %s perd 1 vie (n'a pas répondu)\n", results[i].pseudo);
+                }
+                // Si ce joueur a répondu incorrectement → perd 1 vie
+                else if (!results[i].correct) {
+                    lives_lost++;
+                    printf("DEBUG send_question_results BATTLE: %s perd 1 vie (réponse incorrecte)\n", results[i].pseudo);
+                }
+                
+                // Si ce joueur est le dernier à avoir répondu → perd 1 vie (même si réponse correcte)
+                // Note: si le joueur est le dernier ET a répondu incorrectement, il perd 2 vies au total
+                if (last_player_pseudo && strcmp(results[i].pseudo, last_player_pseudo) == 0) {
+                    lives_lost++;
+                    printf("DEBUG send_question_results BATTLE: %s perd 1 vie (dernier à répondre)\n", results[i].pseudo);
+                }
+            }
+            
+            // Décrémenter les vies dans la DB
+            if (lives_lost > 0 && results[i].lives > 0) {
+                int new_lives = results[i].lives - lives_lost;
+                if (new_lives < 0) new_lives = 0;
+                
+                const char *sql_update = "UPDATE players_session SET lives = ? WHERE id = ?";
+                sqlite3_stmt *stmt_update;
+                if (sqlite3_prepare_v2(db, sql_update, -1, &stmt_update, NULL) == SQLITE_OK) {
+                    sqlite3_bind_int(stmt_update, 1, new_lives);
+                    sqlite3_bind_int(stmt_update, 2, players_session_id);
+                    sqlite3_step(stmt_update);
+                }
+                sqlite3_finalize(stmt_update);
+                
+                // Mettre à jour dans results pour l'affichage
+                results[i].lives = new_lives;
+                
+                // Si le joueur vient d'être éliminé (0 vie), enregistrer eliminated_at
+                if (new_lives == 0 && !was_eliminated) {
+                    const char *sql_elim = "UPDATE players_session SET eliminated_at = ? WHERE id = ?";
+                    sqlite3_stmt *stmt_elim;
+                    if (sqlite3_prepare_v2(db, sql_elim, -1, &stmt_elim, NULL) == SQLITE_OK) {
+                        sqlite3_bind_int(stmt_elim, 1, current_question_num);
+                        sqlite3_bind_int(stmt_elim, 2, players_session_id);
+                        sqlite3_step(stmt_elim);
+                    }
+                    sqlite3_finalize(stmt_elim);
+                    
+                    // Envoyer le message d'élimination
+                    send_player_eliminated(db, session_id, results[i].pseudo);
+                    printf("DEBUG send_question_results BATTLE: %s éliminé à la question %d\n", 
+                           results[i].pseudo, current_question_num);
+                }
+            }
+        }
+        
+        // Vérifier si la partie doit se terminer (un seul joueur avec des vies restantes)
+        int players_with_lives = 0;
+        for (int i = 0; i < count; i++) {
+            if (results[i].lives > 0) {
+                players_with_lives++;
+            }
+        }
+        
+        if (players_with_lives <= 1) {
+            printf("DEBUG send_question_results BATTLE: Fin de partie détectée (%d joueur(s) avec des vies)\n", players_with_lives);
+            // La partie se terminera après l'envoi des résultats
+        }
+    }
+    // ===== FIN LOGIQUE MODE BATTLE =====
+
     char json[4096];
     size_t len = 0;
 
     len += sprintf(json + len,
         "{\"action\":\"question/results\",\"statut\":\"200\","
-        "\"correctAnswer\":%d,"
+        "\"correctAnswer\":\"%s\","
         "\"explanation\":\"%s\",",
         get_correct_answer(db, session_id),
         get_explanation(db, session_id)
@@ -510,14 +959,21 @@ void send_question_results(int session_id, sqlite3 *db)
 
     if (is_battle) {
         const char *last = compute_last_player(results, count);
-        len += sprintf(json + len, "\"lastPlayer\":\"%s\",", last);
+        if (last) {
+            len += sprintf(json + len, "\"lastPlayer\":\"%s\",", last);
+        }
     }
 
     len += sprintf(json + len, "\"results\":[");
 
+    // Recharger les résultats avec les vies mises à jour
+    if (is_battle) {
+        count = load_session_results(db, session_id, results);
+    }
+
     for (int i = 0; i < count; i++) {
         len += sprintf(json + len,
-            "%s{\"pseudo\":\"%s\",\"answer\":%d,\"correct\":%s,"
+            "%s{\"pseudo\":\"%s\",\"answer\":\"%s\",\"correct\":%s,"
             "\"points\":%d,\"totalScore\":%d",
             i == 0 ? "" : ",",
             results[i].pseudo,
@@ -918,7 +1374,7 @@ void send_session_finished_solo(int session_id, sqlite3 *db) {
         snprintf(buf, sizeof(buf),
             "{\"rank\":%d,\"pseudo\":\"", rank++);
         ok = ok && append_str(&json, &length, &capacity, buf);
-        ok = ok && append_json_string(&json, &length, &capacity, pseudo);
+        ok = ok && append_json_string(&json, &length, &capacity, (const unsigned char *)pseudo);
         snprintf(buf, sizeof(buf),
             "\",\"score\":%d,\"correctAnswers\":%d}", score, correct);
         ok = ok && append_str(&json, &length, &capacity, buf);
@@ -989,7 +1445,7 @@ void send_session_finished_battle(int session_id, sqlite3 *db) {
         snprintf(buf, sizeof(buf),
             "{\"rank\":%d,\"pseudo\":\"", rank++);
         ok = ok && append_str(&json, &length, &capacity, buf);
-        ok = ok && append_json_string(&json, &length, &capacity, pseudo);
+        ok = ok && append_json_string(&json, &length, &capacity, (const unsigned char *)pseudo);
 
         snprintf(buf, sizeof(buf),
             "\",\"lives\":%d,\"score\":%d,\"correctAnswers\":%d",
@@ -1006,7 +1462,7 @@ void send_session_finished_battle(int session_id, sqlite3 *db) {
     }
 
     ok = ok && append_str(&json, &length, &capacity, "],\"winner\":\"");
-    ok = ok && append_json_string(&json, &length, &capacity, winner);
+    ok = ok && append_json_string(&json, &length, &capacity, (const unsigned char *)winner);
     ok = ok && append_str(&json, &length, &capacity, "\"}\n");
 
     sqlite3_finalize(stmt);
@@ -1045,6 +1501,37 @@ void send_session_finished(int session_id, sqlite3 *db) {
         NULL, NULL, NULL);
 }
 
+// Fonction pour vérifier si la session est terminée (mode Battle uniquement)
+static bool is_session_finished(sqlite3 *db, int session_id) {
+    bool is_battle = session_is_battle(db, session_id);
+    if (!is_battle) return false;
+    
+    // Compter les joueurs avec des vies restantes
+    const char *sql = "SELECT COUNT(*) FROM players_session WHERE session_id = ? AND lives > 0";
+    sqlite3_stmt *stmt;
+    int players_with_lives = 0;
+    
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+        sqlite3_bind_int(stmt, 1, session_id);
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            players_with_lives = sqlite3_column_int(stmt, 0);
+        }
+    }
+    sqlite3_finalize(stmt);
+    
+    printf("DEBUG is_session_finished: session_id=%d, players_with_lives=%d\n", session_id, players_with_lives);
+    
+    // La partie est terminée s'il reste 1 joueur ou moins avec des vies
+    // Note: <= 1 signifie qu'il reste 0 ou 1 joueur avec des vies
+    // Si 0 joueur, tous sont éliminés (égalité)
+    // Si 1 joueur, il gagne
+    bool finished = (players_with_lives <= 1);
+    if (finished) {
+        printf("DEBUG is_session_finished: Session terminée (il reste %d joueur(s) avec des vies)\n", players_with_lives);
+    }
+    return finished;
+}
+
 static void *question_loop_thread(void *arg) {
     SessionStartArgs *args = (SessionStartArgs *)arg;
     sqlite3 *db = args->db;
@@ -1070,14 +1557,56 @@ static void *question_loop_thread(void *arg) {
            session_id, current_question, nb_questions, time_limit);
 
     // Boucle d'envoi des questions suivantes
+    // Note: current_question commence à 1 après l'envoi de la première question
+    // La boucle gère les questions de 2 à nb_questions
     for (int i = current_question + 1; i <= nb_questions; i++) {
-        sleep(time_limit); // attendre le temps de réponse
+        // Attendre le temps de réponse pour la question précédente (i-1)
+        printf("DEBUG question_loop_thread: Attente timeout pour la question %d\n", i - 1);
+        sleep(time_limit);
+        
+        // Envoyer les résultats de la question précédente (i-1)
+        printf("DEBUG question_loop_thread: Envoi des résultats de la question %d\n", i - 1);
         send_question_results(session_id, db);
-        send_next_question(db, session_id);
+        
+        // Vérifier si la session est terminée après les résultats (mode Battle)
+        if (is_session_finished(db, session_id)) {
+            printf("DEBUG question_loop_thread: Session terminée après les résultats de la question %d (il reste 1 joueur ou moins)\n", i - 1);
+            // Ne pas envoyer la question suivante, la partie est terminée
+            goto end_session;
+        }
+        
+        // Si ce n'est pas la dernière question, envoyer la suivante
+        if (i < nb_questions) {
+            // Pause de 5 secondes avant la question suivante
+            printf("DEBUG question_loop_thread: Pause de 5 secondes avant la question %d\n", i);
+            sleep(5);
+            
+            // Envoyer la question suivante (i)
+            printf("DEBUG question_loop_thread: Envoi de la question %d\n", i);
+            send_next_question(db, session_id);
+        } else {
+            // C'est la dernière question (i == nb_questions)
+            // On vient d'envoyer les résultats de la question i-1
+            // Il faut maintenant envoyer la dernière question, attendre son timeout, puis envoyer ses résultats
+            printf("DEBUG question_loop_thread: Dernière question (%d), envoi de la question\n", i);
+            sleep(5);
+            send_next_question(db, session_id);
+            
+            // Attendre le timeout pour la dernière question
+            printf("DEBUG question_loop_thread: Attente timeout pour la dernière question (%d)\n", i);
+            sleep(time_limit);
+            
+            // Envoyer les résultats de la dernière question
+            printf("DEBUG question_loop_thread: Envoi des résultats de la dernière question (%d)\n", i);
+            send_question_results(session_id, db);
+        }
     }
-    // send_question_results(session_id, db);
-    // sleep(time_limit/2);
+    
+end_session:
+    
+    // Terminer la session
     send_session_finished(session_id, db);
+    free(args);
     return NULL;
 }
 

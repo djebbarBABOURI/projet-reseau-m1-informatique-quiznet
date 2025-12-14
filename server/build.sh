@@ -7,7 +7,7 @@ set -xe
 gcc main.c utils.c questions.c clients.c udp.c db_utils.c handlers.c server.c sha256.c \
     sqlite/sql.c \
     -I./sqlite \
-    ./sqlite/libsqlite3.a \
+    -lsqlite3 \
     -lpthread \
     -o main
 # gcc -Wall -Wextra -O2 \

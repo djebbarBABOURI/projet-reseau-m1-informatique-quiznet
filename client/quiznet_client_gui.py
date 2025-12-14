@@ -365,6 +365,15 @@ class QuizNetGUI:
                                     foreground=self.colors['danger'])
         self.timer_label.grid(row=2, column=0, columnspan=2, pady=10)
         
+        # Affichage des vies (mode Battle uniquement)
+        self.lives_frame = ttk.Frame(self.question_frame)
+        self.lives_frame.grid(row=3, column=0, columnspan=2, pady=5)
+        self.lives_label = ttk.Label(self.lives_frame, text="", 
+                                    font=("Arial", 18, "bold"),
+                                    foreground=self.colors['danger'])
+        self.lives_label.pack()
+        self.lives_frame.grid_remove()  # Caché par défaut
+        
         # Réponses avec style amélioré
         self.answers_frame = ttk.LabelFrame(self.game_frame, text="💭 Réponses", padding="15")
         self.answers_frame.grid(row=1, column=0, columnspan=2, pady=10, sticky=(tk.W, tk.E))
@@ -887,6 +896,11 @@ class QuizNetGUI:
         self.waiting_text.delete(1.0, tk.END)
         self.waiting_text.insert(tk.END, "🚪 SALLE D'ATTENTE\n\n")
         
+        # Afficher les vies si mode Battle
+        if hasattr(self.client, 'lives') and self.client.lives > 0:
+            hearts = "❤️" * self.client.lives + "🤍" * (4 - self.client.lives)
+            self.waiting_text.insert(tk.END, f"❤️ Vies: {hearts} ({self.client.lives}/4)\n\n")
+        
         if self.client.is_creator:
             self.waiting_text.insert(tk.END, "👑 Vous êtes le créateur de la session\n")
             self.waiting_text.insert(tk.END, "Appuyez sur 'Démarrer' quand au moins 2 joueurs sont présents\n\n")
@@ -929,6 +943,9 @@ class QuizNetGUI:
             print(f"DEBUG handle_push_message_gui: session/started reçu, basculement vers page de jeu")
             print(f"DEBUG handle_push_message_gui: countdown={data.get('countdown', 3)}")
             self.client.in_game = True
+            # Afficher les vies si mode Battle (les vies sont déjà mises à jour dans join_session)
+            if hasattr(self.client, 'lives') and self.client.lives > 0:
+                self.root.after(0, lambda: self.update_lives_display(self.client.lives))
             # Basculer immédiatement vers la page de jeu
             self.root.after(0, self.start_game)
         
@@ -942,6 +959,13 @@ class QuizNetGUI:
         
         elif action == "question/results":
             self.timer_running = False
+            # Mettre à jour les vies si mode Battle
+            if "results" in data:
+                for result in data["results"]:
+                    if result.get("pseudo") == self.client.pseudo and "lives" in result:
+                        self.client.lives = result["lives"]
+                        self.root.after(0, lambda l=result["lives"]: self.update_lives_display(l))
+                        break
             self.root.after(0, lambda: self.display_results(data))
             self.client.current_question = None
             self.answered = False
@@ -977,9 +1001,24 @@ class QuizNetGUI:
                 self.client.current_question = None
                 self.root.after(0, lambda: self.submit_button.config(state=tk.DISABLED))
     
+    def update_lives_display(self, lives: int):
+        """Met à jour l'affichage des vies (cœurs) pour le mode Battle"""
+        if lives > 0:
+            # Afficher les cœurs : ❤️ pour les vies restantes, 🤍 pour les vies perdues
+            hearts = "❤️" * lives + "🤍" * (4 - lives)
+            self.lives_label.config(text=f"Vies: {hearts} ({lives}/4)")
+            self.lives_frame.grid()  # Afficher le frame
+        else:
+            # Joueur éliminé
+            self.lives_label.config(text="💀 ÉLIMINÉ (0/4)")
+            self.lives_frame.grid()  # Afficher quand même pour montrer l'élimination
+    
     def start_game(self):
         """Démarre le jeu"""
         print("DEBUG start_game: Démarrage du jeu, basculement vers page de jeu")
+        # Afficher les vies si mode Battle
+        if hasattr(self.client, 'lives') and self.client.lives > 0:
+            self.update_lives_display(self.client.lives)
         # Rendre la page de jeu visible si elle était cachée
         try:
             # Rendre l'onglet visible (si caché avec hide)
@@ -1189,8 +1228,9 @@ class QuizNetGUI:
             
             if "lives" in result:
                 lives = result.get("lives", 0)
+                hearts = "❤️" * lives + "🤍" * (4 - lives) if lives > 0 else "💀"
                 self.results_text.insert(tk.END, 
-                    f"{i}. {pseudo} - Score: {score} (+{points}) - Vies: {lives} {correct}\n")
+                    f"{i}. {pseudo} - Score: {score} (+{points}) - Vies: {hearts} ({lives}/4) {correct}\n")
             else:
                 self.results_text.insert(tk.END, 
                     f"{i}. {pseudo} - Score: {score} (+{points}) {correct}\n")
@@ -1226,12 +1266,13 @@ class QuizNetGUI:
             if mode == "battle":
                 lives = result.get("lives", 0)
                 eliminated = result.get("eliminatedAt", None)
+                hearts = "❤️" * lives + "🤍" * (4 - lives) if lives > 0 else "💀"
                 if eliminated:
                     self.results_text.insert(tk.END, 
-                        f"{rank}. {pseudo} - Vies: {lives} - Score: {score} - Réponses: {correct} (Éliminé Q{eliminated})\n")
+                        f"{rank}. {pseudo} - Vies: {hearts} ({lives}/4) - Score: {score} - Réponses: {correct} (Éliminé Q{eliminated})\n")
                 else:
                     self.results_text.insert(tk.END, 
-                        f"{rank}. {pseudo} - Vies: {lives} - Score: {score} - Réponses: {correct}\n")
+                        f"{rank}. {pseudo} - Vies: {hearts} ({lives}/4) - Score: {score} - Réponses: {correct}\n")
             else:
                 self.results_text.insert(tk.END, 
                     f"{rank}. {pseudo} - Score: {score} - Réponses correctes: {correct}\n")

@@ -1500,7 +1500,8 @@ int load_session_results(sqlite3 *db, int session_id, PlayerResult *results) {
         "  COALESCE(a.points, 0) AS points, "
         "  ps.current_score AS total_score, "
         "  COALESCE(a.response_time, 0) AS response_time, "
-        "  ps.lives "
+        "  ps.lives, "
+        "  CASE WHEN a.id IS NOT NULL THEN 1 ELSE 0 END AS has_answer "
         "FROM players_session ps "
         "JOIN players p ON p.id = ps.player_id "
         "LEFT JOIN answers a ON a.players_session_id = ps.id "
@@ -1542,6 +1543,7 @@ int load_session_results(sqlite3 *db, int session_id, PlayerResult *results) {
         results[i].totalScore = sqlite3_column_int(stmt, 4);
         results[i].responseTime = sqlite3_column_double(stmt, 5);
         results[i].lives = sqlite3_column_int(stmt, 6);
+        results[i].has_answer = sqlite3_column_int(stmt, 7) != 0; // has_answer
 
         i++;
     }
@@ -1581,14 +1583,17 @@ int load_session_results(sqlite3 *db, int session_id, PlayerResult *results) {
 
 bool session_is_battle(sqlite3 *db, int session_id) {
     sqlite3_stmt *stmt;
-    const char *sql = "SELECT is_battle FROM sessions WHERE id = ?";
+    const char *sql = "SELECT mode FROM sessions WHERE id = ?";
 
     if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) return false;
     sqlite3_bind_int(stmt, 1, session_id);
 
     bool result = false;
     if (sqlite3_step(stmt) == SQLITE_ROW) {
-        result = sqlite3_column_int(stmt, 0) != 0;
+        const unsigned char *mode = sqlite3_column_text(stmt, 0);
+        if (mode && strcmp((const char *)mode, "battle") == 0) {
+            result = true;
+        }
     }
 
     sqlite3_finalize(stmt);
@@ -1637,7 +1642,28 @@ const char *get_explanation(sqlite3 *db, int session_id) {
 
 const char *compute_last_player(PlayerResult *results, int count) {
     if (count <= 0) return NULL;
-    return results[count - 1].pseudo; // simple stratégie : dernier du tableau
+    
+    // Trouver le joueur avec le temps de réponse le plus élevé (le dernier à avoir répondu)
+    // Ignorer les joueurs qui n'ont pas répondu (timeout) et ceux qui ont utilisé le joker Passer
+    int last_idx = -1;
+    double max_time = -1.0;
+    
+    for (int i = 0; i < count; i++) {
+        // Ignorer les joueurs qui n'ont pas répondu (timeout) ou qui ont utilisé le joker Passer
+        // has_answer=false ET answer="-1" = timeout (ignorer)
+        // has_answer=true ET answer="-1" = joker Passer (ignorer aussi pour le calcul du lastPlayer)
+        bool is_timeout = (strcmp(results[i].answer, "-1") == 0 && !results[i].has_answer);
+        bool is_skip_joker = (strcmp(results[i].answer, "-1") == 0 && results[i].has_answer);
+        
+        if (!is_timeout && !is_skip_joker && results[i].responseTime > max_time) {
+            max_time = results[i].responseTime;
+            last_idx = i;
+        }
+    }
+    
+    if (last_idx < 0) return NULL; // Aucun joueur n'a vraiment répondu
+    
+    return results[last_idx].pseudo;
 }
 
 // int get_current_question_id(int player_id, sqlite3 *db) {

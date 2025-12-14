@@ -653,7 +653,11 @@ class QuizNetClient:
             
             if "lives" in result:
                 lives = result.get("lives", 0)
-                print(f"{i}. {pseudo} - Score: {score} (+{points}) - Vies: {lives} {correct}")
+                hearts = "❤️" * lives + "🤍" * (4 - lives) if lives > 0 else "💀"
+                print(f"{i}. {pseudo} - Score: {score} (+{points}) - Vies: {hearts} ({lives}/4) {correct}")
+                # Mettre à jour les vies du client si c'est le joueur actuel
+                if pseudo == self.pseudo:
+                    self.lives = lives
             else:
                 print(f"{i}. {pseudo} - Score: {score} (+{points}) {correct}")
         
@@ -697,10 +701,11 @@ class QuizNetClient:
             if mode == "battle":
                 lives = result.get("lives", 0)
                 eliminated = result.get("eliminatedAt", None)
+                hearts = "❤️" * lives + "🤍" * (4 - lives) if lives > 0 else "💀"
                 if eliminated:
-                    print(f"{rank}. {pseudo} - Vies: {lives} - Score: {score} - Réponses correctes: {correct} (Éliminé Q{eliminated})")
+                    print(f"{rank}. {pseudo} - Vies: {hearts} ({lives}/4) - Score: {score} - Réponses correctes: {correct} (Éliminé Q{eliminated})")
                 else:
-                    print(f"{rank}. {pseudo} - Vies: {lives} - Score: {score} - Réponses correctes: {correct}")
+                    print(f"{rank}. {pseudo} - Vies: {hearts} ({lives}/4) - Score: {score} - Réponses correctes: {correct}")
             else:
                 print(f"{rank}. {pseudo} - Score: {score} - Réponses correctes: {correct}")
         
@@ -919,6 +924,11 @@ def _waiting_room(client: QuizNetClient):
     print("\n" + "="*60)
     print("🚪 SALLE D'ATTENTE")
     print("="*60)
+    
+    # Afficher les vies si mode Battle
+    if hasattr(client, 'lives') and client.lives > 0:
+        hearts = "❤️" * client.lives + "🤍" * (4 - client.lives)
+        print(f"❤️ Vies: {hearts} ({client.lives}/4)\n")
     
     if client.is_creator:
         print("👑 Vous êtes le créateur de la session")

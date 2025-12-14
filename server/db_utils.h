@@ -14,6 +14,7 @@ typedef struct {
     int totalScore;
     double responseTime;
     int lives;
+    bool has_answer; // true si une réponse existe dans answers (même si c'est "-1" pour joker Passer)
 } PlayerResult;
 
 void create_tables(sqlite3 *db);
@@ -55,5 +56,6 @@ const char *get_correct_answer(sqlite3 *db, int session_id);
 const char *get_explanation(sqlite3 *db, int session_id);
 const char *compute_last_player(PlayerResult *results, int count);
 int get_current_question_id(int player_id, sqlite3 *db);
+int get_correct_answer_positions(sqlite3 *db, int question_id, int *positions, int max_positions);
 
 #endif
