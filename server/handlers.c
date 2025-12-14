@@ -492,7 +492,7 @@ void send_question_results(int session_id, sqlite3 *db)
     }
 
     // Charger toutes les réponses
-    PlayerResult results[max_players]; // ici max_players remplace MAX_PLAYERS
+    PlayerResult results[max_players];
     int count = load_session_results(db, session_id, results);
 
     bool is_battle = session_is_battle(db, session_id);
@@ -782,94 +782,6 @@ void broadcast_to_session(sqlite3 *db, int session_id, const char *message) {
     }
 }
 
-// Envoie la question suivante (>1) d'une session
-// static void send_next_question(sqlite3 *db, int session_id) {
-//     // Récupérer le numéro de la question courante et nb_questions
-//     const char *sql_session = "SELECT current_question, nb_questions, time_limit FROM sessions WHERE id = ?";
-//     sqlite3_stmt *stmt_session;
-//     int current_question = 1;
-//     int nb_questions = 0;
-//     int time_limit = 30;
-
-//     if (sqlite3_prepare_v2(db, sql_session, -1, &stmt_session, NULL) == SQLITE_OK) {
-//         sqlite3_bind_int(stmt_session, 1, session_id);
-//         if (sqlite3_step(stmt_session) == SQLITE_ROW) {
-//             current_question = sqlite3_column_int(stmt_session, 0);
-//             nb_questions = sqlite3_column_int(stmt_session, 1);
-//             time_limit = sqlite3_column_int(stmt_session, 2);
-//         }
-//     }
-//     sqlite3_finalize(stmt_session);
-
-//     if (current_question > nb_questions) {
-//         printf("DEBUG send_next_question: toutes les questions ont déjà été envoyées\n");
-//         return;
-//     }
-
-//     // Récupérer la question courante
-//     const char *sql_question =
-//         "SELECT q.id, q.type, q.enonce, q.answers, q.difficulty "
-//         "FROM session_questions sq "
-//         "JOIN questions q ON sq.question_id = q.id "
-//         "WHERE sq.session_id = ? AND sq.num_question = ?";
-//     sqlite3_stmt *stmt_question;
-
-//     if (sqlite3_prepare_v2(db, sql_question, -1, &stmt_question, NULL) != SQLITE_OK) return;
-//     sqlite3_bind_int(stmt_question, 1, session_id);
-//     sqlite3_bind_int(stmt_question, 2, current_question);
-
-//     if (sqlite3_step(stmt_question) == SQLITE_ROW) {
-//         const unsigned char *type = sqlite3_column_text(stmt_question, 1);
-//         const unsigned char *enonce = sqlite3_column_text(stmt_question, 2);
-//         const unsigned char *answers_json = sqlite3_column_text(stmt_question, 3);
-//         const unsigned char *difficulty = sqlite3_column_text(stmt_question, 4);
-
-//         // Construire le JSON
-//         size_t capacity = 2048, length = 0;
-//         char *json = malloc(capacity);
-//         if (!json) { sqlite3_finalize(stmt_question); return; }
-//         json[0] = '\0';
-
-//         bool ok = append_str(&json, &length, &capacity, "POST question/new\n{");
-//         ok = ok && append_str(&json, &length, &capacity, "\"action\":\"question/new\",");
-//         char buf[64];
-//         snprintf(buf, sizeof(buf), "\"questionNum\":%d,\"totalQuestions\":%d", current_question, nb_questions);
-//         ok = ok && append_str(&json, &length, &capacity, buf);
-//         ok = ok && append_str(&json, &length, &capacity, ",\"type\":\"");
-//         ok = ok && append_json_string(&json, &length, &capacity, type);
-//         ok = ok && append_str(&json, &length, &capacity, "\",\"difficulty\":\"");
-//         ok = ok && append_json_string(&json, &length, &capacity, difficulty);
-//         ok = ok && append_str(&json, &length, &capacity, "\",\"question\":\"");
-//         ok = ok && append_json_string(&json, &length, &capacity, enonce);
-//         ok = ok && append_str(&json, &length, &capacity, "\"");
-//         ok = ok && append_str(&json, &length, &capacity, ",\"timeLimit\":");
-//         snprintf(buf, sizeof(buf), "%d", time_limit);
-//         ok = ok && append_str(&json, &length, &capacity, buf);
-
-//         if (type && strcmp((const char *)type, "qcm") == 0 && answers_json) {
-//             ok = ok && append_str(&json, &length, &capacity, ",\"answers\":");
-//             ok = ok && append_str(&json, &length, &capacity, (const char *)answers_json);
-//         }
-
-//         ok = ok && append_str(&json, &length, &capacity, "}\n");
-
-//         if (ok) broadcast_to_session(db, session_id, json);
-//         free(json);
-
-//         // Incrémenter current_question
-//         const char *sql_update = "UPDATE sessions SET current_question = ? WHERE id = ?";
-//         sqlite3_stmt *stmt_update;
-//         if (sqlite3_prepare_v2(db, sql_update, -1, &stmt_update, NULL) == SQLITE_OK) {
-//             sqlite3_bind_int(stmt_update, 1, current_question + 1);
-//             sqlite3_bind_int(stmt_update, 2, session_id);
-//             sqlite3_step(stmt_update);
-//         }
-//         sqlite3_finalize(stmt_update);
-//     }
-
-//     sqlite3_finalize(stmt_question);
-// }
-
 static void send_next_question(sqlite3 *db, int session_id) {
     // Récupérer le numéro de la question courante et nb_questions
     const char *sql_session = "SELECT current_question, nb_questions, time_limit FROM sessions WHERE id = ?";
@@ -959,6 +871,180 @@ static void send_next_question(sqlite3 *db, int session_id) {
     sqlite3_finalize(stmt_question);
 }
 
+void send_session_finished_solo(int session_id, sqlite3 *db) {
+    const char *sql =
+        "SELECT p.pseudo, ps.current_score, COALESCE(SUM(a.correct),0) "
+        "FROM players_session ps "
+        "JOIN players p ON p.id = ps.player_id "
+        "LEFT JOIN answers a ON a.players_session_id = ps.id "
+        "WHERE ps.session_id = ? "
+        "GROUP BY ps.id "
+        "ORDER BY ps.current_score DESC, "
+        "COALESCE(SUM(a.correct),0) DESC";
+
+    sqlite3_stmt *stmt;
+    sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
+    sqlite3_bind_int(stmt, 1, session_id);
+
+    size_t capacity = 2048, length = 0;
+    char *json = malloc(capacity);
+    if (!json) {
+        sqlite3_finalize(stmt);
+        return;
+    }
+    json[0] = '\0';
+
+    bool ok = true;
+
+    ok = ok && append_str(&json, &length, &capacity,
+    "POST session/finished\n{");
+    ok = ok && append_str(&json, &length, &capacity,
+    "\"action\":\"session/finished\","
+    "\"mode\":\"solo\",\"ranking\":[");
+
+    int rank = 1;
+    bool first = true;
+
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        if (!first)
+            ok = ok && append_str(&json, &length, &capacity, ",");
+        first = false;
+
+        const char *pseudo = (const char *)sqlite3_column_text(stmt, 0);
+        int score = sqlite3_column_int(stmt, 1);
+        int correct = sqlite3_column_int(stmt, 2);
+
+        char buf[128];
+        snprintf(buf, sizeof(buf),
+            "{\"rank\":%d,\"pseudo\":\"", rank++);
+        ok = ok && append_str(&json, &length, &capacity, buf);
+        ok = ok && append_json_string(&json, &length, &capacity, pseudo);
+        snprintf(buf, sizeof(buf),
+            "\",\"score\":%d,\"correctAnswers\":%d}", score, correct);
+        ok = ok && append_str(&json, &length, &capacity, buf);
+    }
+
+    ok = ok && append_str(&json, &length, &capacity, "]}\n");
+
+    sqlite3_finalize(stmt);
+
+    if (ok) {
+        broadcast_to_session(db, session_id, json);
+    }
+
+    free(json);
+}
+void send_session_finished_battle(int session_id, sqlite3 *db) {
+    const char *sql =
+        "SELECT p.pseudo, ps.lives, ps.current_score, "
+        "COALESCE(SUM(a.correct),0), ps.eliminated_at "
+        "FROM players_session ps "
+        "JOIN players p ON p.id = ps.player_id "
+        "LEFT JOIN answers a ON a.players_session_id = ps.id "
+        "WHERE ps.session_id = ? "
+        "GROUP BY ps.id "
+        "ORDER BY ps.lives DESC, ps.eliminated_at DESC";
+
+    sqlite3_stmt *stmt;
+    sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
+    sqlite3_bind_int(stmt, 1, session_id);
+
+    size_t capacity = 2048, length = 0;
+    char *json = malloc(capacity);
+    if (!json) {
+        sqlite3_finalize(stmt);
+        return;
+    }
+    json[0] = '\0';
+
+    bool ok = true;
+    char winner[64] = {0};
+
+    ok = ok && append_str(&json, &length, &capacity,
+    "POST session/finished\n{");
+    ok = ok && append_str(&json, &length, &capacity,
+    "\"action\":\"session/finished\","
+    "\"mode\":\"battle\",\"ranking\":[");
+
+
+    int rank = 1;
+    bool first = true;
+
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        const char *pseudo = (const char *)sqlite3_column_text(stmt, 0);
+        int lives = sqlite3_column_int(stmt, 1);
+        int score = sqlite3_column_int(stmt, 2);
+        int correct = sqlite3_column_int(stmt, 3);
+        int eliminated_at = sqlite3_column_int(stmt, 4);
+
+        if (rank == 1 && lives > 0) {
+            strncpy(winner, pseudo, sizeof(winner) - 1);
+        }
+
+        if (!first)
+            ok = ok && append_str(&json, &length, &capacity, ",");
+        first = false;
+
+        char buf[256];
+        snprintf(buf, sizeof(buf),
+            "{\"rank\":%d,\"pseudo\":\"", rank++);
+        ok = ok && append_str(&json, &length, &capacity, buf);
+        ok = ok && append_json_string(&json, &length, &capacity, pseudo);
+
+        snprintf(buf, sizeof(buf),
+            "\",\"lives\":%d,\"score\":%d,\"correctAnswers\":%d",
+            lives, score, correct);
+        ok = ok && append_str(&json, &length, &capacity, buf);
+
+        if (lives == 0) {
+            snprintf(buf, sizeof(buf),
+                ",\"eliminatedAt\":%d", eliminated_at);
+            ok = ok && append_str(&json, &length, &capacity, buf);
+        }
+
+        ok = ok && append_str(&json, &length, &capacity, "}");
+    }
+
+    ok = ok && append_str(&json, &length, &capacity, "],\"winner\":\"");
+    ok = ok && append_json_string(&json, &length, &capacity, winner);
+    ok = ok && append_str(&json, &length, &capacity, "\"}\n");
+
+    sqlite3_finalize(stmt);
+
+    if (ok) {
+        broadcast_to_session(db, session_id, json);
+    }
+
+    free(json);
+}
+
+void send_session_finished(int session_id, sqlite3 *db) {
+    char mode[16] = {0};
+
+    const char *sql = "SELECT mode FROM sessions WHERE id = ?";
+    sqlite3_stmt *stmt;
+
+    sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
+    sqlite3_bind_int(stmt, 1, session_id);
+
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        strncpy(mode,
+            (const char *)sqlite3_column_text(stmt, 0),
+            sizeof(mode) - 1);
+    }
+    sqlite3_finalize(stmt);
+
+    if (strcmp(mode, "solo") == 0) {
+        send_session_finished_solo(session_id, db);
+    } else {
+        send_session_finished_battle(session_id, db);
+    }
+
+    sqlite3_exec(db,
+        "UPDATE sessions SET status='finished' WHERE id=?",
+        NULL, NULL, NULL);
+}
+
 static void *question_loop_thread(void *arg) {
     SessionStartArgs *args = (SessionStartArgs *)arg;
     sqlite3 *db = args->db;
@@ -986,9 +1072,12 @@ static void *question_loop_thread(void *arg) {
     // Boucle d'envoi des questions suivantes
     for (int i = current_question + 1; i <= nb_questions; i++) {
         sleep(time_limit); // attendre le temps de réponse
+        send_question_results(session_id, db);
         send_next_question(db, session_id);
     }
-
+    // send_question_results(session_id, db);
+    // sleep(time_limit/2);
+    send_session_finished(session_id, db);
     return NULL;
 }
 
@@ -1102,7 +1191,6 @@ static void send_first_question(sqlite3 *db, int session_id, int nb_questions) {
     // sqlite3_finalize(stmt_upd);
 
 }
-
 // Thread qui gère le countdown et l'envoi de la première question
 static void *session_start_thread(void *arg) {
     SessionStartArgs *args = (SessionStartArgs *)arg;

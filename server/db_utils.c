@@ -1192,13 +1192,51 @@ int store_player_answer(sqlite3 *db, int players_session_id, int question_id, co
         printf("[DEBUG] Result correct=%d\n", correct);
     }
 
-    // 3. Calculer points selon la difficulté
-    if (correct) {
-        if (strcmp(difficulty, "facile") == 0) points = 10;
-        else if (strcmp(difficulty, "moyen") == 0) points = 20;
-        else if (strcmp(difficulty, "difficile") == 0) points = 30;
+    int time_limit = 0;
+
+    /* Récupérer le time_limit de la session */
+    const char *sql_time =
+        "SELECT s.time_limit "
+        "FROM sessions s "
+        "JOIN players_session ps ON ps.session_id = s.id "
+        "WHERE ps.id = ?;";
+
+    if (sqlite3_prepare_v2(db, sql_time, -1, &stmt, NULL) == SQLITE_OK) {
+        sqlite3_bind_int(stmt, 1, players_session_id);
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            time_limit = sqlite3_column_int(stmt, 0);
+        }
     }
-    printf("[DEBUG] points=%d\n", points);
+    sqlite3_finalize(stmt);
+
+    printf("[DEBUG] time_limit=%d, response_time=%.2f\n", time_limit, response_time);
+
+    /* 3. Calculer les points avec bonus rapidité */
+    if (correct) {
+        int base_points = 0;
+        int bonus = 0;
+
+        if (strcmp(difficulty, "facile") == 0) {
+            base_points = 5;
+            bonus = 1;
+        } else if (strcmp(difficulty, "moyen") == 0) {
+            base_points = 10;
+            bonus = 3;
+        } else if (strcmp(difficulty, "difficile") == 0) {
+            base_points = 15;
+            bonus = 6;
+        }
+
+        points = base_points;
+
+        /* Bonus si réponse avant la moitié du temps */
+        if (time_limit > 0 && response_time <= (time_limit / 2.0)) {
+            points += bonus;
+            printf("[DEBUG] Bonus rapidité appliqué: +%d\n", bonus);
+        }
+    }
+
+    printf("[DEBUG] points finaux=%d\n", points);
 
     // 4. Insérer dans la table
     const char *sql_insert =
@@ -1225,6 +1263,32 @@ int store_player_answer(sqlite3 *db, int players_session_id, int question_id, co
     }
 
     sqlite3_finalize(stmt);
+    /* 5. Mettre à jour le score du joueur */
+    if (points > 0) {
+        const char *sql_update_score =
+            "UPDATE players_session "
+            "SET current_score = COALESCE(current_score, 0) + ? "
+            "WHERE id = ?;";
+
+        if (sqlite3_prepare_v2(db, sql_update_score, -1, &stmt, NULL) != SQLITE_OK) {
+            fprintf(stderr, "[ERROR] prepare UPDATE score: %s\n", sqlite3_errmsg(db));
+            return -1;
+        }
+
+        sqlite3_bind_int(stmt, 1, points);
+        sqlite3_bind_int(stmt, 2, players_session_id);
+
+        if (sqlite3_step(stmt) != SQLITE_DONE) {
+            fprintf(stderr, "[ERROR] UPDATE score: %s\n", sqlite3_errmsg(db));
+            sqlite3_finalize(stmt);
+            return -1;
+        }
+
+        sqlite3_finalize(stmt);
+        printf("[DEBUG] Score updated: +%d points for players_session_id=%d\n",
+            points, players_session_id);
+    }
+
     printf("[DEBUG] Answer stored successfully: correct=%d, points=%d\n", correct, points);
     return 0;
 }
@@ -1427,31 +1491,92 @@ int store_player_answer(sqlite3 *db, int players_session_id, int question_id, co
 
 int load_session_results(sqlite3 *db, int session_id, PlayerResult *results) {
     sqlite3_stmt *stmt;
-    const char *sql = "SELECT pseudo, answer, correct, points, total_score, response_time, lives "
-                      "FROM player_results WHERE session_id = ?";
+
+    const char *sql =
+        "SELECT "
+        "  p.pseudo, "
+        "  COALESCE(a.answer, '-1') AS answer, "
+        "  COALESCE(a.correct, 0) AS correct, "
+        "  COALESCE(a.points, 0) AS points, "
+        "  ps.current_score AS total_score, "
+        "  COALESCE(a.response_time, 0) AS response_time, "
+        "  ps.lives "
+        "FROM players_session ps "
+        "JOIN players p ON p.id = ps.player_id "
+        "LEFT JOIN answers a ON a.players_session_id = ps.id "
+        "  AND a.question_id = ( "
+        "      SELECT question_id "
+        "      FROM session_questions "
+        "      WHERE session_id = ? "
+        "        AND num_question = ( "
+        "            SELECT current_question "
+        "            FROM sessions WHERE id = ? "
+        "        ) "
+        "  ) "
+        "WHERE ps.session_id = ? "
+        "ORDER BY ps.current_score DESC";
 
     if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) {
-        fprintf(stderr, "Failed to prepare statement: %s\n", sqlite3_errmsg(db));
+        fprintf(stderr, "load_session_results prepare error: %s\n",
+                sqlite3_errmsg(db));
         return 0;
     }
 
     sqlite3_bind_int(stmt, 1, session_id);
+    sqlite3_bind_int(stmt, 2, session_id);
+    sqlite3_bind_int(stmt, 3, session_id);
 
     int i = 0;
     while (sqlite3_step(stmt) == SQLITE_ROW) {
-        strncpy(results[i].pseudo, (const char *)sqlite3_column_text(stmt, 0), sizeof(results[i].pseudo)-1);
-        strncpy(results[i].answer, (const char *)sqlite3_column_text(stmt, 1), sizeof(results[i].answer)-1);
+
+        strncpy(results[i].pseudo,
+                (const char *)sqlite3_column_text(stmt, 0),
+                sizeof(results[i].pseudo) - 1);
+
+        strncpy(results[i].answer,
+                (const char *)sqlite3_column_text(stmt, 1),
+                sizeof(results[i].answer) - 1);
+
         results[i].correct = sqlite3_column_int(stmt, 2);
         results[i].points = sqlite3_column_int(stmt, 3);
         results[i].totalScore = sqlite3_column_int(stmt, 4);
         results[i].responseTime = sqlite3_column_double(stmt, 5);
         results[i].lives = sqlite3_column_int(stmt, 6);
+
         i++;
     }
 
     sqlite3_finalize(stmt);
-    return i; // nombre de joueurs chargés
+    return i; // nombre de joueurs
 }
+
+// int load_session_results(sqlite3 *db, int session_id, PlayerResult *results) {
+//     sqlite3_stmt *stmt;
+//     const char *sql = "SELECT pseudo, answer, correct, points, total_score, response_time, lives "
+//                       "FROM player_results WHERE session_id = ?";
+
+//     if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+//         fprintf(stderr, "Failed to prepare statement: %s\n", sqlite3_errmsg(db));
+//         return 0;
+//     }
+
+//     sqlite3_bind_int(stmt, 1, session_id);
+
+//     int i = 0;
+//     while (sqlite3_step(stmt) == SQLITE_ROW) {
+//         strncpy(results[i].pseudo, (const char *)sqlite3_column_text(stmt, 0), sizeof(results[i].pseudo)-1);
+//         strncpy(results[i].answer, (const char *)sqlite3_column_text(stmt, 1), sizeof(results[i].answer)-1);
+//         results[i].correct = sqlite3_column_int(stmt, 2);
+//         results[i].points = sqlite3_column_int(stmt, 3);
+//         results[i].totalScore = sqlite3_column_int(stmt, 4);
+//         results[i].responseTime = sqlite3_column_double(stmt, 5);
+//         results[i].lives = sqlite3_column_int(stmt, 6);
+//         i++;
+//     }
+
+//     sqlite3_finalize(stmt);
+//     return i; // nombre de joueurs chargés
+// }
 
 
 bool session_is_battle(sqlite3 *db, int session_id) {

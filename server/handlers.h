@@ -13,5 +13,8 @@ void handle_sessions_list(int fd, sqlite3 *db);
 void handle_session_start(int client_fd, sqlite3 *db);
 void handle_question_answer(const char *json, int client_fd, sqlite3 *db);
 void broadcast_to_session(sqlite3 *db, int session_id, const char *message);
+void send_session_finished(int session_id, sqlite3 *db);
+void send_session_finished_solo(int session_id, sqlite3 *db);
+void send_session_finished_battle(int session_id, sqlite3 *db);
 
 #endif

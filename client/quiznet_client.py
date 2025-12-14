@@ -50,6 +50,7 @@ class QuizNetClient:
         self.time_limit = 30
         self.push_callback = None  # Callback pour les messages push (utilisé par GUI)
         self.last_error: Optional[Dict] = None  # Dernière erreur rencontrée
+        self.question_active = False
         
     def discover_servers(self) -> List[Dict[str, Any]]:
         """Découvre les serveurs QuizNet disponibles via UDP broadcast"""
@@ -335,20 +336,40 @@ class QuizNetClient:
                 self.in_game = True
                 countdown = data.get("countdown", 3)
                 print(f"\n🚀 La session démarre dans {countdown} secondes...")
-                for i in range(countdown, 0, -1):
-                    print(f"   {i}...")
-                    time.sleep(1)
+                # for i in range(countdown, 0, -1):
+                #     print(f"   {i}...")
+                #     time.sleep(1)
+                print(f"\n🚀 La session démarre dans {countdown} secondes...")
+                threading.Thread(
+                    target=self._start_countdown,
+                    args=(countdown,),
+                    daemon=True
+                ).start()
                 print("\n🎯 La session a commencé !\n")
             
+            # elif action == "question/new":
+            #     self.current_question = data
+            #     self.question_start_time = time.time()
+            #     self.time_limit = data.get("timeLimit", 30)  # Récupérer depuis la session si disponible
+            #     self._display_question(data)
             elif action == "question/new":
                 self.current_question = data
                 self.question_start_time = time.time()
-                self.time_limit = data.get("timeLimit", 30)  # Récupérer depuis la session si disponible
+                self.time_limit = data.get("timeLimit", 30)
+                self.waiting_for_response = False
+                self.pending_response = None
+                self.question_active = True
                 self._display_question(data)
-            
+
+            # elif action == "question/results":
+            #     self._display_results(data)
+            #     self.current_question = None
             elif action == "question/results":
+                # self.waiting_for_response = False
+                # self.pending_response = None
+                # self.current_question = None
+                # self.question_active = False
                 self._display_results(data)
-                self.current_question = None
             
             elif action == "session/finished":
                 self._display_final_results(data)
@@ -381,6 +402,12 @@ class QuizNetClient:
         except Exception as e:
             pass  # Ignorer les erreurs de parsing dans le listener
     
+    def _start_countdown(self, countdown):
+        for i in range(countdown, 0, -1):
+            print(f"   {i}...")
+            time.sleep(1)
+        print("\n🎯 La session a commencé !\n")
+
     # === Authentification ===
     
     def register(self, pseudo: str, password: str) -> bool:
@@ -635,7 +662,14 @@ class QuizNetClient:
         
         print("\n" + "-"*60)
         print("⏳ Pause de 5 secondes avant la prochaine question...\n")
-        time.sleep(5)
+        # time.sleep(5)
+    #     threading.Thread(
+    #     target=self._results_pause,
+    #     daemon=True
+    #     ).start()
+
+    # def _results_pause(self):
+    #     time.sleep(5)
     
     def _display_final_results(self, results_data: Dict):
         """Affiche les résultats finaux"""
