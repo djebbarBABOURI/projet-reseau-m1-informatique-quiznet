@@ -643,6 +643,14 @@ class QuizNetClient:
         elif q_type == "text":
             print("\nRéponse attendue: Texte libre")
     
+    def _format_answer(self, answer: str) -> str:
+        """Convertit true/false en Vrai/Faux pour l'affichage"""
+        if answer.lower() == "true":
+            return "Vrai"
+        elif answer.lower() == "false":
+            return "Faux"
+        return answer
+    
     def _display_results(self, results_data: Dict):
         """Affiche les résultats d'une question avec les bonnes réponses et code couleur"""
         # Codes couleur ANSI pour le terminal
@@ -655,7 +663,8 @@ class QuizNetClient:
         print("📊 RÉSULTATS")
         print("="*60)
         correct_answer = results_data.get('correctAnswer', '')
-        print(f"\n✅ Bonne réponse: {correct_answer}")
+        correct_answer_formatted = self._format_answer(correct_answer)
+        print(f"\n✅ Bonne réponse: {correct_answer_formatted}")
         if "explanation" in results_data:
             print(f"💡 Explication: {results_data.get('explanation', '')}")
         
@@ -671,15 +680,16 @@ class QuizNetClient:
         for i, result in enumerate(sorted_results, 1):
             pseudo = result.get("pseudo", "")
             player_answer = result.get("answer", "Pas de réponse")
+            player_answer_formatted = self._format_answer(player_answer)
             is_correct = result.get("correct", False)
             
             # Utiliser la couleur appropriée
             color = GREEN if is_correct else RED
             status_icon = "✅" if is_correct else "❌"
             
-            answer_text = f"{status_icon} {pseudo}: {player_answer}"
+            answer_text = f"{status_icon} {pseudo}: {player_answer_formatted}"
             if player_answer != correct_answer:
-                answer_text += f" (Bonne réponse: {correct_answer})"
+                answer_text += f" (Bonne réponse: {correct_answer_formatted})"
             
             print(f"{color}{BOLD}{answer_text}{RESET}")
         
@@ -714,6 +724,7 @@ class QuizNetClient:
         
         print("\n" + "-"*60)
         print("⏳ Pause de 5 secondes avant la prochaine question...\n")
+        time.sleep(5)
         # time.sleep(5)
     #     threading.Thread(
     #     target=self._results_pause,

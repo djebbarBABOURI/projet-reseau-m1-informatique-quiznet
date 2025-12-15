@@ -88,6 +88,9 @@ class QuizNetGUI:
         self.time_remaining = 0
         self.answered = False
         self.timer_running = False
+        self.countdown_timer = None
+        self.countdown_remaining = 0
+        self.countdown_running = False
         
         self.setup_ui()
         self.discover_servers()
@@ -1014,6 +1017,8 @@ class QuizNetGUI:
         
         elif action == "question/new":
             print(f"DEBUG handle_push_message_gui: question/new reçu, data={data}")
+            # Arrêter le chronomètre de transition s'il est en cours
+            self.countdown_running = False
             self.client.current_question = data
             self.client.question_start_time = time.time()
             self.client.time_limit = data.get("timeLimit", self.client.time_limit)
@@ -1264,6 +1269,14 @@ class QuizNetGUI:
         self.submit_button.config(state=tk.DISABLED)
         self.results_text.insert(tk.END, "✓ Réponse envoyée, en attente des résultats...\n")
     
+    def format_answer(self, answer: str) -> str:
+        """Convertit true/false en Vrai/Faux pour l'affichage"""
+        if answer.lower() == "true":
+            return "Vrai"
+        elif answer.lower() == "false":
+            return "Faux"
+        return answer
+    
     def display_results(self, results_data: Dict):
         """Affiche les résultats avec les bonnes réponses et code couleur"""
         self.results_text.delete(1.0, tk.END)
@@ -1272,14 +1285,16 @@ class QuizNetGUI:
         self.results_text.tag_config("correct", foreground="#27ae60", font=('Arial', 10, 'bold'))
         self.results_text.tag_config("incorrect", foreground="#e74c3c", font=('Arial', 10, 'bold'))
         self.results_text.tag_config("normal", foreground=self.colors['fg'])
+        self.results_text.tag_config("countdown", foreground=self.colors['primary'], font=('Arial', 16, 'bold'))
         
         self.results_text.insert(tk.END, "📊 RÉSULTATS\n", "normal")
         self.results_text.insert(tk.END, "="*50 + "\n\n", "normal")
         
         correct_answer = results_data.get('correctAnswer', '')
+        correct_answer_formatted = self.format_answer(correct_answer)
         explanation = results_data.get('explanation', '')
         
-        self.results_text.insert(tk.END, f"✅ Bonne réponse: {correct_answer}\n", "normal")
+        self.results_text.insert(tk.END, f"✅ Bonne réponse: {correct_answer_formatted}\n", "normal")
         if explanation:
             self.results_text.insert(tk.END, f"💡 {explanation}\n\n", "normal")
         
@@ -1296,6 +1311,7 @@ class QuizNetGUI:
         for i, result in enumerate(sorted_results, 1):
             pseudo = result.get("pseudo", "")
             player_answer = result.get("answer", "Pas de réponse")
+            player_answer_formatted = self.format_answer(player_answer)
             is_correct = result.get("correct", False)
             score = result.get("totalScore", 0)
             points = result.get("points", 0)
@@ -1305,9 +1321,9 @@ class QuizNetGUI:
             status_icon = "✅" if is_correct else "❌"
             
             # Afficher la réponse du joueur avec la couleur appropriée
-            answer_line = f"{status_icon} {pseudo}: {player_answer}"
+            answer_line = f"{status_icon} {pseudo}: {player_answer_formatted}"
             if player_answer != correct_answer:
-                answer_line += f" (Bonne réponse: {correct_answer})"
+                answer_line += f" (Bonne réponse: {correct_answer_formatted})"
             answer_line += "\n"
             
             self.results_text.insert(tk.END, answer_line, color_tag)
@@ -1338,6 +1354,41 @@ class QuizNetGUI:
                 f"\n⚠️ Dernier joueur: {results_data.get('lastPlayer')} (perd une vie)\n", "normal")
         
         self.answered = False
+        
+        # Démarrer le chronomètre de 5 secondes avant la prochaine question
+        self.start_countdown_before_next_question()
+    
+    def start_countdown_before_next_question(self):
+        """Démarre un chronomètre de 5 secondes avant la prochaine question"""
+        self.countdown_running = True
+        self.countdown_remaining = 5
+        self.update_countdown_display()
+    
+    def update_countdown_display(self):
+        """Met à jour l'affichage du chronomètre de transition dans le timer_label"""
+        if not self.countdown_running:
+            return
+        
+        # Afficher le chronomètre dans le timer_label (à la place du temps restant)
+        if self.countdown_remaining > 0:
+            # Changer la couleur selon le temps restant
+            if self.countdown_remaining <= 2:
+                color = self.colors['danger']
+            elif self.countdown_remaining <= 3:
+                color = self.colors['warning']
+            else:
+                color = self.colors['primary']
+            
+            self.timer_label.config(
+                text=f"⏳ Prochaine question dans {self.countdown_remaining} seconde(s)...",
+                foreground=color
+            )
+            self.countdown_remaining -= 1
+            self.root.after(1000, self.update_countdown_display)
+        else:
+            self.countdown_running = False
+            # Réinitialiser le timer_label (sera mis à jour quand la nouvelle question arrive)
+            self.timer_label.config(text="", foreground=self.colors['danger'])
     
     def display_final_results(self, results_data: Dict):
         """Affiche les résultats finaux dans une fenêtre dédiée"""
