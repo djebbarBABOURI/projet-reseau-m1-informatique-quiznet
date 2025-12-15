@@ -52,6 +52,7 @@ class QuizNetClient:
         self.last_error: Optional[Dict] = None  # Dernière erreur rencontrée
         self.question_active = False
         self.session_mode: Optional[str] = None  # "solo" ou "battle"
+        self.history: List[Dict] = []  # Historique des questions/résultats pour replay
         
     def discover_servers(self) -> List[Dict[str, Any]]:
         """Découvre les serveurs QuizNet disponibles via UDP broadcast"""
@@ -335,11 +336,10 @@ class QuizNetClient:
             elif action == "session/started":
                 print(f"DEBUG _handle_push_message: session/started reçu, countdown={data.get('countdown', 3)}")
                 self.in_game = True
+                # Réinitialiser l'historique pour la nouvelle session
+                self.history = []
                 countdown = data.get("countdown", 3)
                 print(f"\n🚀 La session démarre dans {countdown} secondes...")
-                # for i in range(countdown, 0, -1):
-                #     print(f"   {i}...")
-                #     time.sleep(1)
                 print(f"\n🚀 La session démarre dans {countdown} secondes...")
                 threading.Thread(
                     target=self._start_countdown,
@@ -654,8 +654,19 @@ class QuizNetClient:
             return "Faux"
         return answer
     
-    def _display_results(self, results_data: Dict):
-        """Affiche les résultats d'une question avec les bonnes réponses et code couleur"""
+    def _display_results(self, results_data: Dict, record_history: bool = True, show_countdown: bool = True):
+        """Affiche les résultats d'une question avec les bonnes réponses et code couleur.
+
+        record_history: si True, enregistre la question+résultats dans l'historique (pour replay).
+        show_countdown: si True, affiche le compte à rebours de 5 secondes avant la prochaine question.
+        """
+        # Enregistrer dans l'historique pour le replay (uniquement en temps réel)
+        if record_history and self.current_question:
+            self.history.append({
+                "question": dict(self.current_question),
+                "results": results_data
+            })
+
         # Codes couleur ANSI pour le terminal
         GREEN = '\033[92m'
         RED = '\033[91m'
@@ -727,15 +738,17 @@ class QuizNetClient:
             print(f"\n⚠️ Dernier joueur: {results_data.get('lastPlayer')} (perd une vie)")
         
         print("\n" + "-"*60)
-        # Afficher le chronomètre de 5 secondes
-        print("⏳ Prochaine question dans 5 seconde(s)...")
-        for remaining in range(4, 0, -1):
+
+        if show_countdown:
+            # Afficher le chronomètre de 5 secondes
+            print("⏳ Prochaine question dans 5 seconde(s)...")
+            for remaining in range(4, 0, -1):
+                time.sleep(1)
+                # Effacer la ligne précédente et afficher la nouvelle
+                print(f"\033[1A\033[K⏳ Prochaine question dans {remaining} seconde(s)...", end='\r')
             time.sleep(1)
-            # Effacer la ligne précédente et afficher la nouvelle
-            print(f"\033[1A\033[K⏳ Prochaine question dans {remaining} seconde(s)...", end='\r')
-        time.sleep(1)
-        print("\033[1A\033[K")  # Effacer la dernière ligne
-        print()
+            print("\033[1A\033[K")  # Effacer la dernière ligne
+            print()
         # time.sleep(5)
     #     threading.Thread(
     #     target=self._results_pause,
@@ -780,7 +793,36 @@ class QuizNetClient:
                 print(f"{rank}. {pseudo} - Score: {score} - Réponses correctes: {correct}")
         
         print("\n" + "="*60 + "\n")
-        input("Appuyez sur Entrée pour retourner au menu principal...")
+
+        # Proposer le replay de la session
+        while True:
+            choice = input("Tapez 'r' pour revoir les questions de la session, ou appuyez sur Entrée pour retourner au menu principal: ").strip().lower()
+            if choice == "r":
+                self._display_replay_history()
+            elif choice == "":
+                break
+            else:
+                print("Choix invalide.")
+
+    def _display_replay_history(self):
+        """Affiche l'historique des questions/réponses de la session (replay)."""
+        if not self.history:
+            print("\nAucun historique disponible pour cette session.\n")
+            return
+
+        print("\n" + "="*60)
+        print("🔁 REPLAY DE LA SESSION")
+        print("="*60 + "\n")
+
+        for idx, entry in enumerate(self.history, 1):
+            question_data = entry.get("question", {})
+            results_data = entry.get("results", {})
+
+            print(f"\n===== Question {idx} =====")
+            self._display_question(question_data)
+            # Afficher les résultats sans les ré-enregistrer dans l'historique
+            # et sans compte à rebours
+            self._display_results(results_data, record_history=False, show_countdown=False)
     
     def _get_time_limit(self) -> int:
         """Retourne le temps limite pour la session actuelle"""
