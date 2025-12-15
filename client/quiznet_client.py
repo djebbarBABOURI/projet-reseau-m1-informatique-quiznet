@@ -51,6 +51,7 @@ class QuizNetClient:
         self.push_callback = None  # Callback pour les messages push (utilisé par GUI)
         self.last_error: Optional[Dict] = None  # Dernière erreur rencontrée
         self.question_active = False
+        self.session_mode: Optional[str] = None  # "solo" ou "battle"
         
     def discover_servers(self) -> List[Dict[str, Any]]:
         """Découvre les serveurs QuizNet disponibles via UDP broadcast"""
@@ -497,6 +498,7 @@ class QuizNetClient:
             self.current_session_id = response.get("sessionId")
             self.is_creator = response.get("isCreator", False)
             self.time_limit = time_limit  # Stocker le temps limite
+            self.session_mode = mode  # Stocker le mode de session
             if "lives" in response:
                 self.lives = response["lives"]
             if "jokers" in response:
@@ -551,10 +553,11 @@ class QuizNetClient:
         if response and response.get("statut") == "201":
             self.current_session_id = session_id
             self.is_creator = response.get("isCreator", False)
-            # Récupérer le time_limit depuis les sessions disponibles
+            # Récupérer le time_limit et le mode depuis les sessions disponibles
             for session in self.sessions:
                 if session.get("id") == session_id:
                     self.time_limit = session.get("timeLimit", 30)
+                    self.session_mode = session.get("mode", "solo")  # Stocker le mode
                     break
             if "lives" in response:
                 self.lives = response["lives"]
@@ -707,7 +710,8 @@ class QuizNetClient:
             # Utiliser la couleur appropriée pour le score
             color = GREEN if is_correct else RED
             
-            if "lives" in result:
+            # Afficher les vies uniquement en mode Battle
+            if "lives" in result and self.session_mode == "battle":
                 lives = result.get("lives", 0)
                 hearts = "❤️" * lives + "🤍" * (4 - lives) if lives > 0 else "💀"
                 score_line = f"{i}. {pseudo} - Score: {score} (+{points}) - Vies: {hearts} ({lives}/4) {correct}"
@@ -723,8 +727,15 @@ class QuizNetClient:
             print(f"\n⚠️ Dernier joueur: {results_data.get('lastPlayer')} (perd une vie)")
         
         print("\n" + "-"*60)
-        print("⏳ Pause de 5 secondes avant la prochaine question...\n")
-        time.sleep(5)
+        # Afficher le chronomètre de 5 secondes
+        print("⏳ Prochaine question dans 5 seconde(s)...")
+        for remaining in range(4, 0, -1):
+            time.sleep(1)
+            # Effacer la ligne précédente et afficher la nouvelle
+            print(f"\033[1A\033[K⏳ Prochaine question dans {remaining} seconde(s)...", end='\r')
+        time.sleep(1)
+        print("\033[1A\033[K")  # Effacer la dernière ligne
+        print()
         # time.sleep(5)
     #     threading.Thread(
     #     target=self._results_pause,

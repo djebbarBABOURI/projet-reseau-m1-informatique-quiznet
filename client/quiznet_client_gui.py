@@ -962,8 +962,8 @@ class QuizNetGUI:
         self.waiting_text.delete(1.0, tk.END)
         self.waiting_text.insert(tk.END, "🚪 SALLE D'ATTENTE\n\n")
         
-        # Afficher les vies si mode Battle
-        if hasattr(self.client, 'lives') and self.client.lives > 0:
+        # Afficher les vies uniquement si mode Battle
+        if hasattr(self.client, 'lives') and self.client.lives > 0 and self.client.session_mode == "battle":
             hearts = "❤️" * self.client.lives + "🤍" * (4 - self.client.lives)
             self.waiting_text.insert(tk.END, f"❤️ Vies: {hearts} ({self.client.lives}/4)\n\n")
         
@@ -1009,8 +1009,8 @@ class QuizNetGUI:
             print(f"DEBUG handle_push_message_gui: session/started reçu, basculement vers page de jeu")
             print(f"DEBUG handle_push_message_gui: countdown={data.get('countdown', 3)}")
             self.client.in_game = True
-            # Afficher les vies si mode Battle (les vies sont déjà mises à jour dans join_session)
-            if hasattr(self.client, 'lives') and self.client.lives > 0:
+            # Afficher les vies uniquement si mode Battle (les vies sont déjà mises à jour dans join_session)
+            if hasattr(self.client, 'lives') and self.client.lives > 0 and self.client.session_mode == "battle":
                 self.root.after(0, lambda: self.update_lives_display(self.client.lives))
             # Basculer immédiatement vers la page de jeu
             self.root.after(0, self.start_game)
@@ -1027,8 +1027,8 @@ class QuizNetGUI:
         
         elif action == "question/results":
             self.timer_running = False
-            # Mettre à jour les vies si mode Battle
-            if "results" in data:
+            # Mettre à jour les vies uniquement si mode Battle
+            if "results" in data and self.client.session_mode == "battle":
                 for result in data["results"]:
                     if result.get("pseudo") == self.client.pseudo and "lives" in result:
                         self.client.lives = result["lives"]
@@ -1070,7 +1070,12 @@ class QuizNetGUI:
                 self.root.after(0, lambda: self.submit_button.config(state=tk.DISABLED))
     
     def update_lives_display(self, lives: int):
-        """Met à jour l'affichage des vies (cœurs) pour le mode Battle"""
+        """Met à jour l'affichage des vies (cœurs) pour le mode Battle uniquement"""
+        # Ne rien afficher si ce n'est pas le mode Battle
+        if self.client.session_mode != "battle":
+            self.lives_frame.grid_remove()
+            return
+            
         if lives > 0:
             # Afficher les cœurs : ❤️ pour les vies restantes, 🤍 pour les vies perdues
             hearts = "❤️" * lives + "🤍" * (4 - lives)
@@ -1084,9 +1089,12 @@ class QuizNetGUI:
     def start_game(self):
         """Démarre le jeu"""
         print("DEBUG start_game: Démarrage du jeu, basculement vers page de jeu")
-        # Afficher les vies si mode Battle
-        if hasattr(self.client, 'lives') and self.client.lives > 0:
+        # Afficher les vies uniquement si mode Battle
+        if hasattr(self.client, 'lives') and self.client.lives > 0 and self.client.session_mode == "battle":
             self.update_lives_display(self.client.lives)
+        else:
+            # Cacher les vies en mode solo
+            self.lives_frame.grid_remove()
         # Rendre la page de jeu visible si elle était cachée
         try:
             # Rendre l'onglet visible (si caché avec hide)
@@ -1339,8 +1347,8 @@ class QuizNetGUI:
             is_correct = result.get("correct", False)
             color_tag = "correct" if is_correct else "incorrect"
             correct_icon = "✓" if is_correct else "✗"
-            
-            if "lives" in result:
+   
+            if "lives" in result and self.client.session_mode == "battle":
                 lives = result.get("lives", 0)
                 hearts = "❤️" * lives + "🤍" * (4 - lives) if lives > 0 else "💀"
                 score_line = f"{i}. {pseudo} - Score: {score} (+{points}) - Vies: {hearts} ({lives}/4) {correct_icon}\n"
