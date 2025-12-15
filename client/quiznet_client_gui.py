@@ -381,6 +381,15 @@ class QuizNetGUI:
                                        command=self.start_session, state=tk.DISABLED,
                                        style='Success.TButton')
         self.start_button.pack(pady=10)
+
+        # Bouton quitter la session (revient au menu / connexion)
+        self.quit_session_waiting_button = ttk.Button(
+            self.waiting_frame,
+            text="🚪 Quitter la session",
+            command=self.quit_session,
+            style='Danger.TButton'
+        )
+        self.quit_session_waiting_button.pack(pady=(0, 10))
         
         self.main_page_frame.columnconfigure(0, weight=1)
         self.main_page_frame.rowconfigure(1, weight=1)
@@ -452,6 +461,15 @@ class QuizNetGUI:
                                        command=self.submit_answer, state=tk.DISABLED,
                                        style='Success.TButton')
         self.submit_button.grid(row=3, column=0, columnspan=2, pady=15)
+
+        # Bouton quitter la session pendant le jeu
+        self.quit_session_game_button = ttk.Button(
+            self.game_frame,
+            text="🚪 Quitter la session",
+            command=self.quit_session,
+            style='Danger.TButton'
+        )
+        self.quit_session_game_button.grid(row=5, column=0, columnspan=2, pady=5)
         
         # Résultats avec style amélioré
         self.results_frame = ttk.LabelFrame(self.game_frame, text="📊 Résultats", padding="15")
@@ -519,11 +537,12 @@ class QuizNetGUI:
         
         threading.Thread(target=connect, daemon=True).start()
 
-    def logout(self):
-        """Déconnecte un joueur"""
+    def logout(self, confirm: bool = True):
+        """Déconnecte un joueur (et quitte la/les session(s) en cours)."""
         # Confirmation utilisateur
-        if not messagebox.askyesno("Déconnexion", "Voulez-vous vraiment vous déconnecter ?"):
-            return
+        if confirm:
+            if not messagebox.askyesno("Déconnexion", "Voulez-vous vraiment vous déconnecter ?"):
+                return
 
         def do_logout():
             if self.client.logout():
@@ -568,6 +587,18 @@ class QuizNetGUI:
 
         threading.Thread(target=do_logout, daemon=True).start()
 
+
+    def quit_session(self):
+        """Quitte la session en cours (en se déconnectant proprement du serveur)."""
+        if not messagebox.askyesno(
+            "Quitter la session",
+            "Voulez-vous vraiment quitter la session en cours ?\n"
+            "Vous serez déconnecté du serveur et retournerez à l'écran de connexion."
+        ):
+            return
+
+        # Réutilise la logique de déconnexion sans redemander de confirmation
+        self.logout(confirm=False)
 
     def register(self):
         """Inscrit un nouveau joueur"""
