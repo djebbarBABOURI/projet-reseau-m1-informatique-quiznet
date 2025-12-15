@@ -48,7 +48,7 @@ import threading
 import time
 from quiznet_client import QuizNetClient
 from typing import Optional, Dict, List
-
+import socket
 
 class QuizNetGUI:
     """Interface graphique pour le client QuizNet"""
@@ -94,7 +94,36 @@ class QuizNetGUI:
         
         self.setup_ui()
         self.discover_servers()
+        # self.start_udp_listener()
     
+    # def start_udp_listener(self):
+    #     """Écoute les broadcasts server/ready sur le port UDP fixe 6666"""
+    #     UDP_PORT = 6666
+    #     self.udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    #     self.udp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+    #     self.udp_sock.bind(("", UDP_PORT))
+
+    #     def listen():
+    #         while True:
+    #             try:
+    #                 data, addr = self.udp_sock.recvfrom(1024)
+    #                 message = data.decode("utf-8")
+    #                 if "server/ready" in message:
+    #                     # Appeler le callback dans le thread principal Tkinter
+    #                     self.root.after(0, lambda: self.on_server_ready(addr, message))
+    #             except Exception as e:
+    #                 print("Erreur UDP:", e)
+    #                 break
+
+    #     threading.Thread(target=listen, daemon=True).start()
+
+    # def on_server_ready(self, addr, message):
+    #     """Callback lorsqu'un serveur prêt est détecté sur le réseau"""
+    #     print(f"Serveur prêt détecté depuis {addr}: {message}")
+    #     server_entry = f"{addr[0]}:{6666}"
+    #     if not any(server_entry in s for s in getattr(self, "servers", [])):
+    #         self.servers_listbox.insert(tk.END, f"{server_entry} - Broadcast")
+
     def setup_styles(self):
         """Configure les styles modernes pour l'interface"""
         style = ttk.Style()
@@ -434,7 +463,23 @@ class QuizNetGUI:
         
         self.game_frame.columnconfigure(0, weight=1)
         self.game_frame.rowconfigure(4, weight=1)
-    
+    def return_to_discovery_page(self):
+        """Masque les autres pages et revient à la page de découverte des serveurs"""
+        try:
+            # Masquer toutes les pages sauf discovery
+            self.notebook.hide(1)  # Auth
+            self.notebook.hide(2)  # Menu
+            self.notebook.hide(3)  # Jeu
+        except Exception:
+            pass
+        
+        # Sélectionner la page discovery
+        self.notebook.select(self.discovery_frame)
+        self.current_page = "discovery"
+        
+        # Rafraîchir la liste des serveurs
+        self.discover_servers()
+
     def discover_servers(self):
         """Découvre les serveurs disponibles"""
         self.servers_listbox.delete(0, tk.END)
@@ -983,11 +1028,47 @@ class QuizNetGUI:
         threading.Thread(target=do_start, daemon=True).start()
         self.start_button.config(state=tk.DISABLED)
     
+    def show_popup(self, message: str, duration: int = 3000):
+        popup = tk.Toplevel(self.root)
+        popup.title("Information")
+        popup.geometry("260x80")
+        popup.resizable(False, False)
+        popup.transient(self.root)
+        popup.grab_set()
+
+        ttk.Label(
+            popup,
+            text=message,
+            anchor="center"
+        ).pack(expand=True, pady=20)
+
+        popup.after(duration, popup.destroy)
+
+    def notify_server_shutdown(self, text: str):
+        """Affiche une alerte que le serveur s'arrête et désactive l'interface"""
+        messagebox.showwarning("Serveur arrêté", text)
+        
+        # Désactiver les boutons et inputs pour éviter toute interaction
+        for child in self.root.winfo_children():
+            child_state = getattr(child, "state", None)
+            if child_state is not None:
+                try:
+                    child.configure(state=tk.DISABLED)
+                except Exception:
+                    pass
+
+        # Optionnel : revenir à la page de connexion
+        try:
+            self.notebook.select(self.auth_frame)
+            self.notebook.hide(2)  # Menu
+            self.notebook.hide(3)  # Jeu
+        except Exception:
+            pass
+
     def handle_push_message_gui(self, header: str, data: Dict):
         """Gère les messages push du serveur (version GUI)"""
         action = data.get("action", "")
         print(f"DEBUG handle_push_message_gui: action={action}, data={data}")
-        
         if action == "session/player/joined":
             pseudo = data.get("pseudo", "")
             nb_players = data.get("nbPlayers", 0)
@@ -1048,12 +1129,18 @@ class QuizNetGUI:
             self.root.after(0, lambda: self.results_text.insert(
                 tk.END, f"⚠️ {pseudo} a quitté la session\n"))
             self.root.after(0, lambda: self.results_text.see(tk.END))
+            self.root.after(0, lambda: self.show_popup(
+                f"⚠️ {pseudo} a quitté la session"
+            ))
         
         elif action == "session/player/eliminated":
             pseudo = data.get("pseudo", "")
             self.root.after(0, lambda: self.results_text.insert(
                 tk.END, f"💀 {pseudo} a été éliminé !\n"))
             self.root.after(0, lambda: self.results_text.see(tk.END))
+            self.root.after(0, lambda: self.show_popup(
+                f"💀 {pseudo} a été éliminé !"
+            ))
         
         elif action == "joker/use":
             self.client.jokers = data.get("jokers", self.client.jokers)
@@ -1068,6 +1155,24 @@ class QuizNetGUI:
                 self.answered = True
                 self.client.current_question = None
                 self.root.after(0, lambda: self.submit_button.config(state=tk.DISABLED))
+        elif action == "server/shutdown":
+            print("DEBUG: shutdown détecté, retour à la page des serveurs")
+            # Afficher un message à l’utilisateur
+            self.root.after(0, lambda: messagebox.showwarning(
+                "Serveur arrêté", "Le serveur a été arrêté. Retour à la liste des serveurs."
+            ))
+            # Revenir à la page discovery (serveurs)
+            self.root.after(0, self.return_to_discovery_page)
+            self.root.after(0, self.discover_servers)
+
+        elif action == "server/ready":
+            print("DEBUG: server/ready reçu, relance discover_servers")
+            # Afficher un message optionnel à l'utilisateur
+            # self.root.after(0, lambda: messagebox.showinfo(
+            #     "Serveur prêt", "Un serveur est disponible. Mise à jour de la liste des serveurs."
+            # ))
+            # Relancer la découverte des serveurs
+            self.root.after(0, self.discover_servers)
     
     def update_lives_display(self, lives: int):
         """Met à jour l'affichage des vies (cœurs) pour le mode Battle uniquement"""
@@ -1586,6 +1691,7 @@ class QuizNetGUI:
         
         # Message d'information
         messagebox.showinfo("Fin de session", "La session est terminée ! Consultez les résultats ci-dessous.")
+
 
 
 def main():

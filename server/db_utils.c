@@ -279,6 +279,39 @@ int insert_question(sqlite3 *db, int theme_id, const char *difficulty,
 // }
 
 //
+int get_player_pseudo_by_id(sqlite3 *db, int player_id, char *pseudo_out, size_t pseudo_out_size)
+{
+    const char *sql = "SELECT pseudo FROM players WHERE id = ?;";
+    sqlite3_stmt *stmt;
+
+    if (!db || !pseudo_out) return -1;
+
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+        fprintf(stderr, "Erreur prepare get_player_pseudo_by_id: %s\n", sqlite3_errmsg(db));
+        return -1;
+    }
+
+    sqlite3_bind_int(stmt, 1, player_id);
+
+    int rc = sqlite3_step(stmt);
+    if (rc != SQLITE_ROW) {
+        sqlite3_finalize(stmt);
+        return 1; // joueur non trouvé
+    }
+
+    const unsigned char *pseudo_db = sqlite3_column_text(stmt, 0);
+    if (!pseudo_db) {
+        sqlite3_finalize(stmt);
+        return -1;
+    }
+
+    strncpy(pseudo_out, (const char *)pseudo_db, pseudo_out_size - 1);
+    pseudo_out[pseudo_out_size - 1] = '\0';
+
+    sqlite3_finalize(stmt);
+    return 0; // succès
+}
+
 int ensure_players_table(sqlite3 *db)
 {
     const char *sql =

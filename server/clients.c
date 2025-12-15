@@ -1,8 +1,9 @@
+#include "clients.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
-#include "clients.h"
 #include "sqlite/sqlite3.h"
+#include <unistd.h> 
 
 static ClientInfo clients[MAX_CLIENTS];
 static int clients_count = 0;
@@ -93,4 +94,18 @@ int get_fd_by_player_id(int player_id) {
         }
     }
     return -1;
+}
+
+
+// Envoie un message à tous les clients connectés
+void broadcast_to_all_clients(const char *message) {
+    for (int i = 0; i < clients_count; i++) {
+        int fd = clients[i].fd;
+        if (fd > 0) {
+            ssize_t sent = write(fd, message, strlen(message));
+            if (sent == -1) {
+                perror("Erreur broadcast client");
+            }
+        }
+    }
 }

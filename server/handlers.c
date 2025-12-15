@@ -385,9 +385,24 @@ void handle_player_logout(int client_fd, sqlite3 *db)
     SessionList sessions = get_current_sessions(player_id, db);
     if (sessions.count > 0) {
         // Construire le message JSON
+        char pseudo[64];  // tampon pour récupérer le pseudo
         char notify[256];
-        snprintf(notify, sizeof(notify),
-            "{\"action\":\"session/player/left\",\"playerId\":%d}", player_id);
+        int ret = get_player_pseudo_by_id(db, player_id, pseudo, sizeof(pseudo));
+
+        if (ret == 0) {
+            // joueur trouvé
+            snprintf(notify, sizeof(notify),
+                    "POST session/player/left\n{\"action\":\"session/player/left\",\"playerId\":%d,\"pseudo\":\"%s\"}",
+                    player_id, pseudo);
+        } else if (ret == 1) {
+            // joueur non trouvé
+            snprintf(notify, sizeof(notify),
+                    "POST session/player/left\n{\"action\":\"session/player/left\",\"playerId\":%d,\"pseudo\":\"inconnu\"}",
+                    player_id);
+        } else {
+            // erreur SQLite
+            fprintf(stderr, "Erreur lors de la récupération du pseudo pour player_id=%d\n", player_id);
+        }
 
         // Boucler sur toutes les sessions et notifier les autres joueurs
         for (int i = 0; i < sessions.count; i++) {
@@ -401,7 +416,7 @@ void handle_player_logout(int client_fd, sqlite3 *db)
 
     // Réponse au client qui se déconnecte
     const char *resp =
-        "{\"action\":\"player/logout\",\"statut\":\"200\",\"message\":\"logout successful\"}";
+        "POST player/logout\n{\"action\":\"player/logout\",\"statut\":\"200\",\"message\":\"logout successful\"}";
     send(client_fd, resp, strlen(resp), 0);
 
     // Fermer la connexion socket
