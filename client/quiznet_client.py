@@ -644,16 +644,25 @@ class QuizNetClient:
             print("\nRéponse attendue: Texte libre")
     
     def _display_results(self, results_data: Dict):
-        """Affiche les résultats d'une question"""
+        """Affiche les résultats d'une question avec les bonnes réponses et code couleur"""
+        # Codes couleur ANSI pour le terminal
+        GREEN = '\033[92m'
+        RED = '\033[91m'
+        RESET = '\033[0m'
+        BOLD = '\033[1m'
+        
         print("\n" + "="*60)
         print("📊 RÉSULTATS")
         print("="*60)
-        print(f"\n✅ Bonne réponse: {results_data.get('correctAnswer', '')}")
+        correct_answer = results_data.get('correctAnswer', '')
+        print(f"\n✅ Bonne réponse: {correct_answer}")
         if "explanation" in results_data:
             print(f"💡 Explication: {results_data.get('explanation', '')}")
         
         results = results_data.get("results", [])
-        print("\n📈 Classement temporaire:")
+        
+        # Afficher les réponses des joueurs avec code couleur
+        print("\n📝 Réponses des joueurs:")
         print("-"*60)
         
         # Trier par score décroissant
@@ -661,19 +670,44 @@ class QuizNetClient:
         
         for i, result in enumerate(sorted_results, 1):
             pseudo = result.get("pseudo", "")
+            player_answer = result.get("answer", "Pas de réponse")
+            is_correct = result.get("correct", False)
+            
+            # Utiliser la couleur appropriée
+            color = GREEN if is_correct else RED
+            status_icon = "✅" if is_correct else "❌"
+            
+            answer_text = f"{status_icon} {pseudo}: {player_answer}"
+            if player_answer != correct_answer:
+                answer_text += f" (Bonne réponse: {correct_answer})"
+            
+            print(f"{color}{BOLD}{answer_text}{RESET}")
+        
+        print("\n" + "-"*60)
+        print("📈 Classement temporaire:")
+        print("-"*60)
+        
+        for i, result in enumerate(sorted_results, 1):
+            pseudo = result.get("pseudo", "")
             score = result.get("totalScore", 0)
             points = result.get("points", 0)
-            correct = "✓" if result.get("correct", False) else "✗"
+            is_correct = result.get("correct", False)
+            correct = "✓" if is_correct else "✗"
+            
+            # Utiliser la couleur appropriée pour le score
+            color = GREEN if is_correct else RED
             
             if "lives" in result:
                 lives = result.get("lives", 0)
                 hearts = "❤️" * lives + "🤍" * (4 - lives) if lives > 0 else "💀"
-                print(f"{i}. {pseudo} - Score: {score} (+{points}) - Vies: {hearts} ({lives}/4) {correct}")
+                score_line = f"{i}. {pseudo} - Score: {score} (+{points}) - Vies: {hearts} ({lives}/4) {correct}"
                 # Mettre à jour les vies du client si c'est le joueur actuel
                 if pseudo == self.pseudo:
                     self.lives = lives
             else:
-                print(f"{i}. {pseudo} - Score: {score} (+{points}) {correct}")
+                score_line = f"{i}. {pseudo} - Score: {score} (+{points}) {correct}"
+            
+            print(f"{color}{BOLD}{score_line}{RESET}")
         
         if "lastPlayer" in results_data:
             print(f"\n⚠️ Dernier joueur: {results_data.get('lastPlayer')} (perd une vie)")

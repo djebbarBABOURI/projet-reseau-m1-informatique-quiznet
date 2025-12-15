@@ -1265,42 +1265,77 @@ class QuizNetGUI:
         self.results_text.insert(tk.END, "✓ Réponse envoyée, en attente des résultats...\n")
     
     def display_results(self, results_data: Dict):
-        """Affiche les résultats"""
+        """Affiche les résultats avec les bonnes réponses et code couleur"""
         self.results_text.delete(1.0, tk.END)
-        self.results_text.insert(tk.END, "📊 RÉSULTATS\n")
-        self.results_text.insert(tk.END, "="*50 + "\n\n")
+        
+        # Configurer les tags de couleur
+        self.results_text.tag_config("correct", foreground="#27ae60", font=('Arial', 10, 'bold'))
+        self.results_text.tag_config("incorrect", foreground="#e74c3c", font=('Arial', 10, 'bold'))
+        self.results_text.tag_config("normal", foreground=self.colors['fg'])
+        
+        self.results_text.insert(tk.END, "📊 RÉSULTATS\n", "normal")
+        self.results_text.insert(tk.END, "="*50 + "\n\n", "normal")
         
         correct_answer = results_data.get('correctAnswer', '')
         explanation = results_data.get('explanation', '')
         
-        self.results_text.insert(tk.END, f"✅ Bonne réponse: {correct_answer}\n")
+        self.results_text.insert(tk.END, f"✅ Bonne réponse: {correct_answer}\n", "normal")
         if explanation:
-            self.results_text.insert(tk.END, f"💡 {explanation}\n\n")
+            self.results_text.insert(tk.END, f"💡 {explanation}\n\n", "normal")
         
         results = results_data.get("results", [])
         sorted_results = sorted(results, key=lambda x: x.get("totalScore", 0), reverse=True)
         
-        self.results_text.insert(tk.END, "📈 Classement temporaire:\n")
-        self.results_text.insert(tk.END, "-"*50 + "\n")
+        self.results_text.insert(tk.END, "📈 Classement temporaire:\n", "normal")
+        self.results_text.insert(tk.END, "-"*50 + "\n", "normal")
+        
+        # Afficher les réponses de chaque joueur avec la bonne réponse
+        self.results_text.insert(tk.END, "\n📝 Réponses des joueurs:\n", "normal")
+        self.results_text.insert(tk.END, "-"*50 + "\n", "normal")
+        
+        for i, result in enumerate(sorted_results, 1):
+            pseudo = result.get("pseudo", "")
+            player_answer = result.get("answer", "Pas de réponse")
+            is_correct = result.get("correct", False)
+            score = result.get("totalScore", 0)
+            points = result.get("points", 0)
+            
+            # Déterminer la couleur selon si la réponse est correcte
+            color_tag = "correct" if is_correct else "incorrect"
+            status_icon = "✅" if is_correct else "❌"
+            
+            # Afficher la réponse du joueur avec la couleur appropriée
+            answer_line = f"{status_icon} {pseudo}: {player_answer}"
+            if player_answer != correct_answer:
+                answer_line += f" (Bonne réponse: {correct_answer})"
+            answer_line += "\n"
+            
+            self.results_text.insert(tk.END, answer_line, color_tag)
+        
+        self.results_text.insert(tk.END, "\n" + "-"*50 + "\n", "normal")
+        self.results_text.insert(tk.END, "📊 Scores:\n", "normal")
+        self.results_text.insert(tk.END, "-"*50 + "\n", "normal")
         
         for i, result in enumerate(sorted_results, 1):
             pseudo = result.get("pseudo", "")
             score = result.get("totalScore", 0)
             points = result.get("points", 0)
-            correct = "✓" if result.get("correct", False) else "✗"
+            is_correct = result.get("correct", False)
+            color_tag = "correct" if is_correct else "incorrect"
+            correct_icon = "✓" if is_correct else "✗"
             
             if "lives" in result:
                 lives = result.get("lives", 0)
                 hearts = "❤️" * lives + "🤍" * (4 - lives) if lives > 0 else "💀"
-                self.results_text.insert(tk.END, 
-                    f"{i}. {pseudo} - Score: {score} (+{points}) - Vies: {hearts} ({lives}/4) {correct}\n")
+                score_line = f"{i}. {pseudo} - Score: {score} (+{points}) - Vies: {hearts} ({lives}/4) {correct_icon}\n"
             else:
-                self.results_text.insert(tk.END, 
-                    f"{i}. {pseudo} - Score: {score} (+{points}) {correct}\n")
+                score_line = f"{i}. {pseudo} - Score: {score} (+{points}) {correct_icon}\n"
+            
+            self.results_text.insert(tk.END, score_line, color_tag)
         
         if "lastPlayer" in results_data:
             self.results_text.insert(tk.END, 
-                f"\n⚠️ Dernier joueur: {results_data.get('lastPlayer')} (perd une vie)\n")
+                f"\n⚠️ Dernier joueur: {results_data.get('lastPlayer')} (perd une vie)\n", "normal")
         
         self.answered = False
     

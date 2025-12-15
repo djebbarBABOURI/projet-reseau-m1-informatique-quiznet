@@ -1604,15 +1604,123 @@ bool session_is_battle(sqlite3 *db, int session_id) {
 const char *get_correct_answer(sqlite3 *db, int session_id) {
     static char answer[256];
     sqlite3_stmt *stmt;
-    const char *sql = "SELECT correct_answer FROM questions "
-                      "WHERE id = (SELECT current_question_id FROM sessions WHERE id = ?)";
+    const char *sql = 
+        "SELECT q.correct_answer, q.type, q.answers "
+        "FROM questions q "
+        "JOIN session_questions sq ON q.id = sq.question_id "
+        "WHERE sq.session_id = ? "
+        "  AND sq.num_question = (SELECT current_question FROM sessions WHERE id = ?)";
 
-    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) return NULL;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+        fprintf(stderr, "[ERROR] get_correct_answer prepare failed: %s\n", sqlite3_errmsg(db));
+        answer[0] = '\0';
+        return answer;
+    }
+    
     sqlite3_bind_int(stmt, 1, session_id);
+    sqlite3_bind_int(stmt, 2, session_id);
 
     if (sqlite3_step(stmt) == SQLITE_ROW) {
-        strncpy(answer, (const char *)sqlite3_column_text(stmt, 0), sizeof(answer)-1);
+        const unsigned char *correct_text = sqlite3_column_text(stmt, 0);
+        const unsigned char *type_text = sqlite3_column_text(stmt, 1);
+        const unsigned char *answers_text = sqlite3_column_text(stmt, 2);
+        
+        if (!correct_text) {
+            answer[0] = '\0';
+            sqlite3_finalize(stmt);
+            return answer;
+        }
+        
+        char type[32] = {0};
+        if (type_text) {
+            strncpy(type, (const char *)type_text, sizeof(type)-1);
+        }
+        
+        // Pour les QCM, utiliser get_correct_answer_positions pour obtenir les indices corrects
+        // puis convertir le premier indice en texte de réponse
+        if (strcmp(type, "qcm") == 0 && answers_text) {
+            // Récupérer le question_id
+            int question_id = -1;
+            sqlite3_stmt *stmt_qid;
+            const char *sql_qid = 
+                "SELECT sq.question_id "
+                "FROM session_questions sq "
+                "WHERE sq.session_id = ? "
+                "  AND sq.num_question = (SELECT current_question FROM sessions WHERE id = ?)";
+            
+            if (sqlite3_prepare_v2(db, sql_qid, -1, &stmt_qid, NULL) == SQLITE_OK) {
+                sqlite3_bind_int(stmt_qid, 1, session_id);
+                sqlite3_bind_int(stmt_qid, 2, session_id);
+                if (sqlite3_step(stmt_qid) == SQLITE_ROW) {
+                    question_id = sqlite3_column_int(stmt_qid, 0);
+                }
+                sqlite3_finalize(stmt_qid);
+            }
+            
+            if (question_id > 0) {
+                int positions[10];
+                int nb_correct = get_correct_answer_positions(db, question_id, positions, 10);
+                if (nb_correct > 0) {
+                    // Prendre le premier indice correct
+                    int idx = positions[0];
+                    
+                    // Nettoyer answers
+                    char answers_raw[1024] = {0};
+                    strncpy(answers_raw, (const char *)answers_text, sizeof(answers_raw)-1);
+                    char answers_clean[1024] = {0};
+                    int j = 0;
+                    for (int i = 0; answers_raw[i] != '\0' && j < sizeof(answers_clean)-1; i++) {
+                        if (answers_raw[i] != '[' && answers_raw[i] != ']' && answers_raw[i] != '"') {
+                            answers_clean[j++] = answers_raw[i];
+                        }
+                    }
+                    trim_quotes_spaces(answers_clean);
+                    
+                    // Parser les réponses séparées par des virgules
+                    char *answers_copy = strdup(answers_clean);
+                    char *token = strtok(answers_copy, ",");
+                    int current_idx = 0;
+                    
+                    while (token && current_idx <= idx) {
+                        // Nettoyer les espaces
+                        while (*token == ' ') token++;
+                        char *end = token + strlen(token) - 1;
+                        while (end > token && *end == ' ') *end-- = '\0';
+                        
+                        if (current_idx == idx) {
+                            strncpy(answer, token, sizeof(answer)-1);
+                            answer[sizeof(answer)-1] = '\0';
+                            free(answers_copy);
+                            sqlite3_finalize(stmt);
+                            return answer;
+                        }
+                        current_idx++;
+                        token = strtok(NULL, ",");
+                    }
+                    free(answers_copy);
+                }
+            }
+        }
+        
+        // Pour les autres types ou si la conversion a échoué, utiliser directement le texte
+        strncpy(answer, (const char *)correct_text, sizeof(answer)-1);
+        answer[sizeof(answer)-1] = '\0';
+        
+        // Nettoyer les caractères JSON si présents
+        char cleaned[256] = {0};
+        int j = 0;
+        for (int i = 0; answer[i] != '\0' && j < sizeof(cleaned)-1; i++) {
+            if (answer[i] != '[' && answer[i] != ']' && answer[i] != '"') {
+                cleaned[j++] = answer[i];
+            }
+        }
+        cleaned[j] = '\0';
+        trim_quotes_spaces(cleaned);
+        strncpy(answer, cleaned, sizeof(answer)-1);
+        answer[sizeof(answer)-1] = '\0';
+        
     } else {
+        fprintf(stderr, "[WARN] get_correct_answer: No question found for session_id=%d\n", session_id);
         answer[0] = '\0';
     }
 
@@ -1623,15 +1731,32 @@ const char *get_correct_answer(sqlite3 *db, int session_id) {
 const char *get_explanation(sqlite3 *db, int session_id) {
     static char explanation[512];
     sqlite3_stmt *stmt;
-    const char *sql = "SELECT explanation FROM questions "
-                      "WHERE id = (SELECT current_question_id FROM sessions WHERE id = ?)";
+    const char *sql = 
+        "SELECT q.explanation "
+        "FROM questions q "
+        "JOIN session_questions sq ON q.id = sq.question_id "
+        "WHERE sq.session_id = ? "
+        "  AND sq.num_question = (SELECT current_question FROM sessions WHERE id = ?)";
 
-    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) return NULL;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+        fprintf(stderr, "[ERROR] get_explanation prepare failed: %s\n", sqlite3_errmsg(db));
+        explanation[0] = '\0';
+        return explanation;
+    }
+    
     sqlite3_bind_int(stmt, 1, session_id);
+    sqlite3_bind_int(stmt, 2, session_id);
 
     if (sqlite3_step(stmt) == SQLITE_ROW) {
-        strncpy(explanation, (const char *)sqlite3_column_text(stmt, 0), sizeof(explanation)-1);
+        const unsigned char *text = sqlite3_column_text(stmt, 0);
+        if (text) {
+            strncpy(explanation, (const char *)text, sizeof(explanation)-1);
+            explanation[sizeof(explanation)-1] = '\0';
+        } else {
+            explanation[0] = '\0';
+        }
     } else {
+        fprintf(stderr, "[WARN] get_explanation: No question found for session_id=%d\n", session_id);
         explanation[0] = '\0';
     }
 
