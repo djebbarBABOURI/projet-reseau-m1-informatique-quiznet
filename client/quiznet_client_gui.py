@@ -82,6 +82,7 @@ class QuizNetGUI:
         self.selected_theme_ids: List[int] = []
         self.selected_themes_var = tk.StringVar(value="Aucun thème sélectionné")
         self.sessions = []
+        self.replay_history: List[Dict] = []  # Historique local pour le replay GUI
         
         # Variables pour le jeu
         self.question_timer = None
@@ -1009,6 +1010,8 @@ class QuizNetGUI:
             print(f"DEBUG handle_push_message_gui: session/started reçu, basculement vers page de jeu")
             print(f"DEBUG handle_push_message_gui: countdown={data.get('countdown', 3)}")
             self.client.in_game = True
+            # Réinitialiser l'historique de replay pour la nouvelle session
+            self.replay_history = []
             # Afficher les vies uniquement si mode Battle (les vies sont déjà mises à jour dans join_session)
             if hasattr(self.client, 'lives') and self.client.lives > 0 and self.client.session_mode == "battle":
                 self.root.after(0, lambda: self.update_lives_display(self.client.lives))
@@ -1034,6 +1037,12 @@ class QuizNetGUI:
                         self.client.lives = result["lives"]
                         self.root.after(0, lambda l=result["lives"]: self.update_lives_display(l))
                         break
+            # Enregistrer la question + résultats dans l'historique pour le replay
+            if self.client.current_question:
+                self.replay_history.append({
+                    "question": dict(self.client.current_question),
+                    "results": data
+                })
             self.root.after(0, lambda: self.display_results(data))
             self.client.current_question = None
             self.answered = False
@@ -1574,10 +1583,20 @@ class QuizNetGUI:
         button_frame = ttk.Frame(main_container)
         button_frame.pack(fill=tk.X, pady=(10, 0))
         
-        close_button = ttk.Button(button_frame,
-                                 text="✅ Retour au menu principal",
-                                 command=lambda: [results_window.destroy(), self.notebook.select(2)])
-        close_button.pack(pady=10)
+        # Bouton Replay
+        replay_button = ttk.Button(
+            button_frame,
+            text="🔁 Revoir les questions de la session",
+            command=self.show_replay_window
+        )
+        replay_button.pack(side=tk.LEFT, padx=10, pady=10)
+
+        close_button = ttk.Button(
+            button_frame,
+            text="✅ Retour au menu principal",
+            command=lambda: [results_window.destroy(), self.notebook.select(2)]
+        )
+        close_button.pack(side=tk.RIGHT, padx=10, pady=10)
         
         # Configurer le scroll avec la souris
         def _on_mousewheel(event):
@@ -1586,6 +1605,102 @@ class QuizNetGUI:
         
         # Message d'information
         messagebox.showinfo("Fin de session", "La session est terminée ! Consultez les résultats ci-dessous.")
+
+    def show_replay_window(self):
+        """Affiche une fenêtre avec le replay de la session (toutes les questions et réponses)."""
+        if not self.replay_history:
+            messagebox.showinfo("Replay", "Aucun historique de questions disponible pour cette session.")
+            return
+
+        replay_window = tk.Toplevel(self.root)
+        replay_window.title("🔁 Replay de la session")
+        replay_window.geometry("900x750")
+        replay_window.resizable(True, True)
+        replay_window.configure(bg=self.colors['bg'])
+
+        main_container = ttk.Frame(replay_window, padding="20")
+        main_container.pack(fill=tk.BOTH, expand=True)
+
+        title_label = tk.Label(
+            main_container,
+            text="🔁 Replay - Questions et réponses de la session",
+            font=('Arial', 18, 'bold'),
+            bg=self.colors['bg'],
+            fg=self.colors['primary']
+        )
+        title_label.pack(pady=(0, 10))
+
+        text_frame = ttk.Frame(main_container)
+        text_frame.pack(fill=tk.BOTH, expand=True)
+
+        replay_text = scrolledtext.ScrolledText(
+            text_frame,
+            height=30,
+            width=80,
+            font=('Arial', 10),
+            wrap=tk.WORD
+        )
+        replay_text.pack(fill=tk.BOTH, expand=True)
+
+        # Tags couleur
+        replay_text.tag_config("question", font=('Arial', 12, 'bold'), foreground=self.colors['dark'])
+        replay_text.tag_config("correct", foreground=self.colors['success'])
+        replay_text.tag_config("incorrect", foreground=self.colors['danger'])
+        replay_text.tag_config("info", foreground=self.colors['primary'])
+
+        # Remplir avec l'historique
+        for idx, entry in enumerate(self.replay_history, 1):
+            q = entry.get("question", {})
+            r = entry.get("results", {})
+
+            question_num = q.get("questionNum", idx)
+            total_questions = q.get("totalQuestions", "")
+            question_text = q.get("question", "")
+            difficulty = q.get("difficulty", "")
+            q_type = q.get("type", "")
+            answers = q.get("answers", [])
+
+            replay_text.insert(tk.END, f"\n{'='*70}\n", "info")
+            replay_text.insert(tk.END, f"Question {question_num}/{total_questions} - Difficulté: {difficulty}\n", "info")
+            replay_text.insert(tk.END, f"📝 {question_text}\n\n", "question")
+
+            # Afficher les réponses possibles pour QCM/booléen
+            if q_type == "qcm" and answers:
+                for i, ans in enumerate(answers):
+                    replay_text.insert(tk.END, f"  {i}. {ans}\n", "info")
+                replay_text.insert(tk.END, "\n", "info")
+            elif q_type == "boolean":
+                replay_text.insert(tk.END, "  0. Faux\n  1. Vrai\n\n", "info")
+
+            correct_answer = r.get("correctAnswer", "")
+            correct_answer_formatted = self.format_answer(correct_answer)
+            explanation = r.get("explanation", "")
+
+            replay_text.insert(tk.END, f"✅ Bonne réponse: {correct_answer_formatted}\n", "info")
+            if explanation:
+                replay_text.insert(tk.END, f"💡 {explanation}\n\n", "info")
+
+            results = r.get("results", [])
+            sorted_results = sorted(results, key=lambda x: x.get("totalScore", 0), reverse=True)
+
+            replay_text.insert(tk.END, "📝 Réponses des joueurs:\n", "info")
+
+            for res in sorted_results:
+                pseudo = res.get("pseudo", "")
+                player_answer = res.get("answer", "Pas de réponse")
+                player_answer_formatted = self.format_answer(player_answer)
+                is_correct = res.get("correct", False)
+
+                tag = "correct" if is_correct else "incorrect"
+                status_icon = "✅" if is_correct else "❌"
+
+                line = f"{status_icon} {pseudo}: {player_answer_formatted}"
+                if player_answer != correct_answer:
+                    line += f" (Bonne réponse: {correct_answer_formatted})"
+                line += "\n"
+                replay_text.insert(tk.END, line, tag)
+
+        replay_text.see(tk.END)
 
 
 def main():
